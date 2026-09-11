@@ -156,6 +156,7 @@ const BAD_INFO = [
   ["null capabilities", { ...apiInfo(), capabilities: null }],
   ["non-string capability", { ...apiInfo(), capabilities: [...CAPABILITIES, 1] }],
   ["blank capability", { ...apiInfo(), capabilities: [...CAPABILITIES, " "] }],
+    ["sparse capabilities", { ...apiInfo(), capabilities: [...CAPABILITIES, ,] }],
   ...CAPABILITIES.map((missing) => [
     `missing ${missing}`, { ...apiInfo(), capabilities: CAPABILITIES.filter((item) => item !== missing) },
   ]),
@@ -175,6 +176,7 @@ const FAILURES = [
   ["rejected Error", () => Promise.reject(new Error("transport unavailable")), /transport unavailable/],
   ["rejected string", () => Promise.reject("provider missing"), /provider missing/],
   ["rejected undefined", () => Promise.reject(undefined), /failed: undefined/],
+    ["unprintable rejection", () => Promise.reject(Object.create(null)), /unreadable provider error/],
 ];
 for (const [label, fail, message] of FAILURES) {
   test(`handles discovery ${label} without calling a date model`, async (t) => {
@@ -555,6 +557,29 @@ test("journal inputs accept Gregorian leap centuries and the provider's inclusiv
     const { client } = clientFor(t, { fromJournalDay: () => iso });
     assert.equal(await client.fromJournalDay(day), iso);
     assert.equal(await client.fromJournalDay(String(day)), iso);
+  }
+});
+
+test("structural response bounds may extend beyond the supported input years", async (t) => {
+  // Synthetic, internally consistent envelopes test Gregorian boundary handling,
+  // not the correctness of a Persian conversion or its display label.
+  const cases = [
+    {
+      gregorian: { year: 1622, month: 1, day: 1, iso: "1622-01-01", journalDay: 16220101 },
+      persian: { year: 1000, month: 10, day: 12, iso: "1000-10-12", label: "structural fixture", weekOfYear: 42 },
+      week: { start: "1622-01-01", end: "1622-01-07", key: "weekly-16220101" },
+      month: { start: "1621-12-21", end: "1622-01-19", key: "monthly-1000-10", financeKey: "1000-10" },
+    },
+    {
+      gregorian: { year: 9998, month: 12, day: 31, iso: "9998-12-31", journalDay: 99981231 },
+      persian: { year: 9377, month: 10, day: 11, iso: "9377-10-11", label: "structural fixture", weekOfYear: 42 },
+      week: { start: "9998-12-26", end: "9999-01-01", key: "weekly-99981226" },
+      month: { start: "9998-12-21", end: "9999-01-19", key: "monthly-9377-10", financeKey: "9377-10" },
+    },
+  ];
+  for (const value of cases) {
+    const { client } = clientFor(t, { describeDate: () => value });
+    assert.deepEqual(await client.describeDate(value.gregorian.iso), value);
   }
 });
 

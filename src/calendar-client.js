@@ -6,6 +6,14 @@ function requireValue(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function errorMessage(error) {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "unreadable provider error";
+  }
+}
+
 function record(value, field) {
   requireValue(
     value !== null && typeof value === "object" &&
@@ -53,7 +61,7 @@ function validateInfo(info) {
   requireValue(info.id === "persian-calendar", 'API info id must be "persian-calendar"');
   requireValue(info.version === 1, "API info version must be 1");
   requireValue(Array.isArray(info.capabilities) &&
-    info.capabilities.every((value) => typeof value === "string" && value.trim().length > 0),
+    Array.from(info.capabilities).every((value) => typeof value === "string" && value.trim().length > 0),
   "API info capabilities must be an array of nonempty strings");
   for (const capability of CAPABILITIES) {
     requireValue(info.capabilities.includes(capability), `API info is missing capability "${capability}"`);
@@ -166,11 +174,11 @@ export function createCalendarClient({ invoke, timeoutMs = 3000 }) {
           try {
             accept(value);
           } catch (error) {
-            finish(new Error(`Calendar ${target}: invalid response: ${error.message}`, { cause: error }));
+            finish(new Error(`Calendar ${target}: invalid response: ${errorMessage(error)}`, { cause: error }));
           }
         }, (error) => {
           if (!active) return;
-          const detail = error instanceof Error ? error.message : String(error);
+          const detail = errorMessage(error);
           finish(new Error(`Calendar ${target} failed: ${detail}`, { cause: error }));
         });
       }

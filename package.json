@@ -1,0 +1,23 @@
+{
+  "name": "logseq-journal-routines",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Visible read-only setup preview and Calendar dependency probe for Journal & Routines.",
+  "type": "module",
+  "main": "index.html",
+  "scripts": {
+    "build": "esbuild src/index.js --bundle --format=iife --platform=browser --outfile=dist/index.js",
+    "test": "node --test src/*.test.js",
+        "test:browser": "node scripts/validate_setup.cjs"
+  },
+  "dependencies": {
+    "@logseq/libs": "0.0.17"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "logseq": {
+    "id": "journal-routines",
+    "title": "Journal & Routines — Setup Preview"
+  }
+}
