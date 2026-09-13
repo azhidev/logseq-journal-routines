@@ -64,6 +64,9 @@ export function createSetupController({
 
   function open() {
     if (disposed) return;
+    // Opening starts a new comparison session even if our Close was not called.
+    // Only Refresh carries the previous completed fingerprint forward.
+    previousPlanId = undefined;
     visible = true;
     sdk.showMainUI({ autoFocus: true });
     view.focus();

@@ -1,6 +1,6 @@
 {
   "name": "logseq-journal-routines",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Visible read-only setup preview and Calendar dependency probe for Journal & Routines.",
   "type": "module",

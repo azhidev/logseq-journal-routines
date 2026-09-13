@@ -45,6 +45,7 @@ export function mountSetupView(document, { onRefresh, onClose }) {
     return node;
   }
   element("h1", "Journal & Routines — Setup preview").id = "jr-title";
+  element("p", "Preview build: 0.2.1").className = "jr-muted";
   element("p", "Read-only · Journal automation is not enabled").className = "jr-notice";
   element("p", "Inspect the current graph before future setup. Nothing here creates or changes pages, templates, routines, or journals.");
   const actions = element("div");
@@ -133,6 +134,8 @@ export function mountSetupView(document, { onRefresh, onClose }) {
         if (plan.id) {
           element("p", "Plan fingerprint (sampled sources, SHA-256):", planArea);
           element("code", plan.id, planArea).dataset.planId = plan.id;
+        } else {
+          element("p", "Plan fingerprint unavailable — this inspection cannot identify a comparable draft.", planArea);
         }
         if (plan.blockers.length) {
           element("h3", "Review blockers", planArea);

@@ -69,6 +69,76 @@ function harness(t) {
 }
 
 const report = (name) => ({ graph: { name } });
+const plannedReport = (id) => ({ ...report("A"), plan: { version: 1, id } });
+
+async function finishPlan(h, id) {
+  h.requests.at(-1).resolve(plannedReport(id));
+  await nextTurn();
+  return h.frames.at(-1).planComparison;
+}
+
+test("plan fingerprints compare consecutive completed inspections, including unavailable recovery", async (t) => {
+  const h = harness(t);
+  h.controller.start();
+  assert.equal(await finishPlan(h, "a".repeat(64)), "new");
+  for (const [id, expected] of [
+    ["a".repeat(64), "unchanged"],
+    ["b".repeat(64), "changed"],
+    [null, "unavailable"],
+    ["b".repeat(64), "unavailable"],
+    ["b".repeat(64), "unchanged"],
+  ]) {
+    h.refresh();
+    assert.deepEqual(h.frames.at(-1), { state: "checking" });
+    assert.equal(await finishPlan(h, id), expected);
+  }
+});
+
+for (const reset of ["close", "JR open", "palette open", "graph change", "error", "missing plan"]) {
+  test(`comparison history is cleared after ${reset}`, async (t) => {
+    const h = harness(t);
+    h.controller.start();
+    const id = "a".repeat(64);
+    assert.equal(await finishPlan(h, id), "new");
+    if (reset === "close") {
+      h.close();
+      void h.open();
+    } else if (reset === "JR open") {
+      void h.open();
+    } else if (reset === "palette open") {
+      void h.commands[0].action();
+    } else if (reset === "graph change") {
+      h.graphChanged();
+    } else {
+      h.refresh();
+      if (reset === "error") h.requests.at(-1).reject(new Error("Inspection failed."));
+      else h.requests.at(-1).resolve(report("without plan"));
+      await nextTurn();
+      h.refresh();
+    }
+    assert.equal(await finishPlan(h, id), "new");
+  });
+}
+
+for (const outcome of ["success", "rejection"]) {
+  test(`superseded inspection ${outcome} cannot alter fingerprint comparison history`, async (t) => {
+    const h = harness(t);
+    h.controller.start();
+    const id = "a".repeat(64);
+    await finishPlan(h, id);
+    h.refresh();
+    const stale = h.requests.at(-1);
+    h.refresh();
+    assert.equal(await finishPlan(h, id), "unchanged");
+    const count = h.frames.length;
+    if (outcome === "success") stale.resolve(plannedReport("b".repeat(64)));
+    else stale.reject(new Error("stale"));
+    await nextTurn();
+    assert.equal(h.frames.length, count);
+    h.refresh();
+    assert.equal(await finishPlan(h, id), "unchanged");
+  });
+}
 
 test("start auto-opens once and idempotently registers the view, command, model, and toolbar", async (t) => {
   const h = harness(t);

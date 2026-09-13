@@ -67,6 +67,16 @@ async function browserFixture(source) {
     month: { start: "2025-03-21", end: "2025-04-20", key: "monthly-1404-01", financeKey: "1404-01" },
   };
   const sections = ["Focus", "Weekly tasks", "Monthly tasks", "Tasks", "Notes", "End-of-day review"];
+  const uuid = (n) => `12345678-1234-4234-8234-${String(n).padStart(12, "0")}`;
+  const block = (n, content, children = []) => ({ uuid: uuid(n), content, properties: {}, children });
+  const privateNote = 'PRIVATE NOTE <img src=x onerror="window.__jrInjected=true"> ' + "private-content-".repeat(40);
+  const templateRoot = block(1, "PRIVATE ROOT\ntemplate:: daily-default\ntemplate-including-parent:: false",
+    ["Tasks", "Notes"].map((section, i) => block(i + 2, `## ${section}`, [block(i + 20, privateNote)])));
+  templateRoot.properties = { template: "daily-default", "template-including-parent": false, custom: "PRIVATE PROPERTY" };
+  let complete = false;
+  const routineTrees = Object.fromEntries(["Week Routine", "Month Routine"].map((name, i) => [name,
+    [block(50 + i * 2, name, [block(51 + i * 2, "DONE PRIVATE ROUTINE TEXT")])],
+  ]));
   let graph = { name: "Graph A", path: "/fixture/A" };
   let available = true;
   let graphFailure = false;
@@ -131,7 +141,7 @@ async function browserFixture(source) {
       async getTemplate(name) {
         check(name === "daily-default", "unexpected template read");
         calls.push("template");
-        return graph.path === "/fixture/A" ? { uuid: "template-root" } : null;
+        return graph.path === "/fixture/A" ? { uuid: templateRoot.uuid } : null;
       },
       async invokeExternalPlugin(target, ...args) {
         calls.push(target);
@@ -153,17 +163,19 @@ async function browserFixture(source) {
       async getPage(name) {
         check(["Templates", "Week Routine", "Month Routine"].includes(name), "unexpected page lookup");
         calls.push(`page:${name}`);
-        return graph.path === "/fixture/A" ? { name: name.toLowerCase() } : null;
+        return graph.path === "/fixture/A" && (name === "Templates" || complete)
+          ? { name: name.toLowerCase(), uuid: uuid(80 + name.length), properties: { custom: "PRIVATE PAGE PROPERTY" } } : null;
       },
       async getPageBlocksTree(name) {
         check(["Week Routine", "Month Routine"].includes(name), "unexpected routine read");
         calls.push(`tree:${name}`);
-        return [{ content: name, children: [{ content: "PRIVATE ROUTINE TEXT", children: [] }] }];
+        check(graph.path === "/fixture/A" && complete, "tree read for a missing routine page");
+        return structuredClone(routineTrees[name]);
       },
       async getBlock(uuid, options) {
-        check(uuid === "template-root" && options.includeChildren === true, "unexpected block read");
+        check(graph.path === "/fixture/A" && uuid === templateRoot.uuid && options.includeChildren === true, "unexpected block read");
         calls.push("block");
-        return { uuid, content: "daily-default", children: sections.map((content) => ({ content, children: [] })) };
+        return structuredClone(templateRoot);
       },
     }),
   });
@@ -202,8 +214,39 @@ async function browserFixture(source) {
     check(notices.length === 0, "startup should not show command feedback");
     groups.push("automatic visible DOM, two commands, JR model/toolbar, read-only summaries");
 
+    const planArea = () => dialog.querySelector(".jr-plan");
+    const planRows = () => [...dialog.querySelectorAll("[data-plan-change]")];
+    const fingerprint = () => dialog.querySelector("[data-plan-id]")?.textContent;
+    function comparison(expected) {
+      const messages = {
+        new: "New inspection. Refresh preview to compare the sampled sources again.",
+        unchanged: "Same sampled sources and plan as the previous inspection. This is not whole-graph validation or permission to apply.",
+        changed: "The sampled sources or plan changed. The previous draft is superseded; review the current draft below.",
+        unavailable: "A comparable fingerprint is unavailable. Do not rely on the previous draft; refresh after resolving blockers.",
+      };
+      const node = dialog.querySelector("[data-plan-comparison]");
+      check(node?.dataset.planComparison === expected && node.textContent === messages[expected], `expected ${expected} comparison, got ${node?.textContent}`);
+    }
+    function identifiablePlan() {
+      const node = dialog.querySelector("[data-plan-id]");
+      check(/^[a-f0-9]{64}$/.test(fingerprint()) && node.dataset.planId === fingerprint(), "native SHA-256 fingerprint missing or malformed");
+      return fingerprint();
+    }
+    function noPlan(label) {
+      check(!planArea() && !fingerprint() && !dialog.querySelector("[data-plan-comparison]") && planRows().length === 0, `${label}: stale plan or comparison retained`);
+    }
+    function additions(ids) {
+      check(JSON.stringify(planRows().map((row) => row.dataset.planChange)) === JSON.stringify(ids), `wrong additions: ${planRows().map((row) => row.dataset.planChange).join(", ")}`);
+      check(planArea()?.textContent.includes(`Proposed additions (${ids.length})`), "addition count missing");
+    }
+    function blocked(reason) {
+      check(planArea()?.textContent.includes("Blocked — resolve the review findings") && planArea().textContent.includes(reason), "blocked plan/reason missing");
+      additions([]);
+      check(planArea().textContent.includes("No additions proposed while this plan is blocked."), "blocked empty-state missing");
+      safetyAndBounds("blocked plan");
+    }
     function safetyAndBounds(label) {
-      const controls = [...dialog.querySelectorAll('button, a, input, select, [role="button"]')];
+      const controls = [...dialog.querySelectorAll('button, a, input, textarea, select, [contenteditable], [role="button"]')];
       check(controls.length === 2 && controls[0] === refresh && controls[1] === close, `${label}: unexpected action (Apply/Enable must not exist)`);
       check(refresh.textContent === "Refresh preview" && close.textContent === "Close", `${label}: read-only controls changed`);
       const bounds = dialog.getBoundingClientRect();
@@ -211,7 +254,38 @@ async function browserFixture(source) {
       check(dialog.scrollWidth <= dialog.clientWidth + 1, `${label}: horizontal panel overflow`);
       check(document.documentElement.scrollWidth <= innerWidth + 1, `${label}: horizontal document overflow`);
       check(getComputedStyle(dialog).overflowY === "auto", `${label}: long report cannot scroll`);
+      for (const node of dialog.querySelectorAll("pre, [data-plan-id]")) {
+        check(node.scrollWidth <= node.clientWidth + 1, `${label}: fingerprint/content overflow`);
+        for (const rect of node.getClientRects()) check(rect.left >= bounds.left && rect.right <= bounds.right + 1, `${label}: fingerprint/content outside panel`);
+      }
+      check(!text().includes("PRIVATE") && !dialog.innerHTML.includes("/fixture/") && !dialog.querySelector("img, script") && !window.__jrInjected, `${label}: private note/property/path or executable markup rendered`);
+      check(unexpected.length === 0, `${label}: forbidden SDK access: ${unexpected.join(", ")}`);
+      if (planArea()) {
+        for (const warning of ["What stays unchanged", "Tasks/Notes content", "current and historical journals unchanged", "Required before any future apply", "backup", "explicit per-graph approval", "not authorization", "no executor or graph writes"]) {
+          check(planArea().textContent.includes(warning), `${label}: missing plan safety text: ${warning}`);
+        }
+      }
     }
+    const partialIds = ["create-week-routine", "create-month-routine", "append-focus", "append-weekly-tasks", "append-monthly-tasks", "append-end-of-day-review"];
+    function partialPlan() {
+      additions(partialIds);
+      check(planArea().textContent.includes("Draft for review only — not approved or executable."), "draft warning missing");
+      for (const [i, name] of ["Week Routine", "Month Routine"].entries()) {
+        const row = planRows()[i];
+        check(row.querySelector("strong").textContent === `Create ${name}` && row.textContent.includes(`Target: page:${name}`), "routine page target/title missing");
+        check(row.querySelector("pre").textContent === "(Empty page — no blocks or sample tasks)" && row.textContent.includes("Create an empty page with no blocks."), "routine proposal contains tasks");
+      }
+      for (const [i, section] of ["Focus", "Weekly tasks", "Monthly tasks", "End-of-day review"].entries()) {
+        const row = planRows()[i + 2];
+        check(row.querySelector("strong").textContent === `Add ${section}` && row.querySelector("pre").textContent === `## ${section}`, "wrong proposed heading/content");
+        check(row.textContent.includes(`Target: block:${templateRoot.uuid}`) && row.textContent.includes("last direct child") && row.textContent.includes("do not rewrite, reparent, or reorder"), "heading target/append-only placement missing");
+      }
+      check(!calls.some((call) => call.startsWith("tree:")), "partial graph read nonexistent routine trees");
+    }
+    partialPlan();
+    comparison("new");
+    const firstFingerprint = identifiablePlan();
+    groups.push("valid Tasks/Notes template: two empty routine pages, four exact append-only headings, native fingerprint and safety copy");
     safetyAndBounds("wide");
     check(innerWidth === 1200 && dialog.getBoundingClientRect().width <= 760, "wide viewport sizing not exercised");
     window.frameElement.style.width = "360px";
@@ -219,7 +293,66 @@ async function browserFixture(source) {
     await until(() => innerWidth === 360 && innerHeight === 640, "narrow frame resize");
     safetyAndBounds("narrow");
     check(dialog.scrollHeight > dialog.clientHeight, "narrow long report should scroll vertically");
-    groups.push("wide 1200px and narrow 360px bounds; no Apply/Enable controls");
+    groups.push("wide 1200px and narrow 360px bounds, long native fingerprint; only Refresh/Close controls");
+
+    async function refreshPlan(label) {
+      refresh.click();
+      check(status().startsWith("Checking"), `${label}: checking state missing`);
+      noPlan(label);
+      await until(ready, label);
+      safetyAndBounds(label);
+    }
+    await refreshPlan("unchanged sampled sources");
+    partialPlan();
+    comparison("unchanged");
+    check(identifiablePlan() === firstFingerprint, "unchanged source changed fingerprint");
+    templateRoot.children[1].children[0].content += " PRIVATE SOURCE EDIT";
+    await refreshPlan("private note source edit");
+    partialPlan();
+    comparison("changed");
+    const editedFingerprint = identifiablePlan();
+    check(editedFingerprint !== firstFingerprint, "private note edit did not change fingerprint");
+    await refreshPlan("stable edited source");
+    comparison("unchanged");
+    check(identifiablePlan() === editedFingerprint, "edited source fingerprint is unstable");
+    groups.push("Refresh clears draft synchronously; new/unchanged/changed comparison tracks private source edits without rendering them");
+
+    templateRoot.children.push(block(90, "## Tasks"));
+    await refreshPlan("ambiguous duplicate template heading");
+    blocked("Duplicate, nested, or root-level matching sections");
+    comparison("changed");
+    check(identifiablePlan() !== editedFingerprint, "ambiguous evidence fingerprint not updated");
+    templateRoot.children.pop();
+    // The inspector can summarize a string UUID, but the planner must reject it.
+    const noteUuid = templateRoot.children[1].children[0].uuid;
+    templateRoot.children[1].children[0].uuid = "invalid-note-uuid";
+    await refreshPlan("incomplete evidence without fingerprint");
+    blocked("Unsupported, unreadable, incomplete, or non-hashable setup evidence");
+    comparison("unavailable");
+    check(!fingerprint() && !planArea().textContent.includes(editedFingerprint), "unhashable evidence retained old fingerprint");
+    check(planArea().textContent.includes("Plan fingerprint unavailable"), "unhashable evidence lacks explicit fingerprint status");
+    templateRoot.children[1].children[0].uuid = noteUuid;
+    await refreshPlan("comparable evidence recovery");
+    partialPlan();
+    comparison("unavailable");
+    check(identifiablePlan() === editedFingerprint, "restored evidence did not restore fingerprint");
+    await refreshPlan("comparison baseline after recovery");
+    comparison("unchanged");
+    groups.push("ambiguous template blocks all additions; invalid evidence removes fingerprint; recovery does not compare against stale draft");
+
+    complete = true;
+    templateRoot.children.push(...sections.filter((section) => !["Tasks", "Notes"].includes(section)).map((section, i) => block(30 + i, `## ${section}`)));
+    await refreshPlan("complete customized graph");
+    additions([]);
+    comparison("changed");
+    const completeFingerprint = identifiablePlan();
+    check(planArea().textContent.includes("Draft for review only") && planArea().textContent.includes("No additions needed within the inspected scope. Existing content stays unchanged."), "complete graph empty-state missing or blocked");
+    check([...dialog.querySelectorAll(".jr-check strong")].every((node) => node.textContent.endsWith("— existing")), "complete graph checks are not all existing");
+    check(calls.includes("tree:Week Routine") && calls.includes("tree:Month Routine") && text().includes("Routine entries: 1 available, 0 empty"), "valid routine trees not inspected");
+    await refreshPlan("complete graph unchanged");
+    comparison("unchanged");
+    check(identifiablePlan() === completeFingerprint, "complete graph fingerprint unstable");
+    groups.push("complete customized template and routine trees: no additions, unchanged content, stable fingerprint");
 
     close.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
     check(document.activeElement === refresh, "forward focus wrap failed");
@@ -227,28 +360,54 @@ async function browserFixture(source) {
     check(document.activeElement === close, "backward focus wrap failed");
     close.click();
     check(!visible && !text().includes("weekly-20250315"), "Close did not hide/clear report");
+    noPlan("Close");
     const readsBeforeReopen = calls.length;
     await open.action();
     check(visible && ready() && calls.length > readsBeforeReopen, "command reopen did not inspect afresh");
+    comparison("new");
+    check(identifiablePlan() === completeFingerprint, "reopen changed unchanged evidence");
     close.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     check(!visible && !ready(), "Escape did not close/clear report");
+    noPlan("Escape");
     await model[anchor.dataset.onClick]();
     check(visible && ready() && document.activeElement === close, "toolbar model reopen failed");
+    comparison("new");
     refresh.click();
     check(status().startsWith("Checking") && !text().includes("weekly-20250315"), "Refresh did not clear old snapshot immediately");
+    noPlan("Refresh");
     await until(ready, "Refresh completion");
-    groups.push("Close, Escape, command/model reopen, Refresh and keyboard focus");
+    comparison("unchanged");
+    check(text().includes("Preview build: 0.2.1"), "loaded preview build is not identifiable");
+    // Model/command opens must reset independently of our Close handler. This
+    // also covers repeated host-dispatched opens after an inspection completes.
+    for (const reopen of [() => model[anchor.dataset.onClick](), () => open.action()]) {
+      await reopen();
+      comparison("new");
+      check(identifiablePlan() === completeFingerprint, "explicit open changed unchanged evidence");
+      await refreshPlan("comparison after explicit open");
+      comparison("unchanged");
+    }
+    groups.push("Close, Escape, command/model open reset without Close, Refresh comparison, build label and keyboard focus");
 
+    // Missing routine pages would require additions if Calendar were available.
+    complete = false;
     available = false;
     refresh.click();
     await until(ready, "dependency unavailable");
     check(text().includes("Unavailable:") && text().includes("Load Persian Calendar & Experience") && !text().includes("weekly-20250315"), "dependency failure retained stale period data or lacked guidance");
+    blocked("Calendar dependency is unavailable");
+    check(dialog.querySelector('[data-check="week-routine"] strong').textContent.endsWith("— missing") && dialog.querySelector('[data-check="month-routine"] strong').textContent.endsWith("— missing"), "dependency blocker did not exercise otherwise-needed routine additions");
+    comparison("changed");
+    check(identifiablePlan() !== completeFingerprint, "dependency blocker did not change plan fingerprint");
     await probe.action();
     check(notices.at(-1)?.type === "warning", "manual probe missing unavailable feedback");
+    complete = true;
     available = true;
     refresh.click();
     await until(ready, "dependency recovery");
     check(text().includes("Calendar API v1 date check succeeded") && text().includes("weekly-20250315"), "dependency did not recover");
+    comparison("changed");
+    check(identifiablePlan() === completeFingerprint && planArea().textContent.includes("Draft for review only"), "dependency recovery did not restore draft");
     await probe.action();
     check(notices.at(-1)?.type === "success", "manual probe missing recovery feedback");
     groups.push("dependency unavailable/recovery and diagnostic command feedback");
@@ -263,17 +422,50 @@ async function browserFixture(source) {
     graph = { name: maliciousName, path: "/fixture/B" };
     emitGraph();
     check(status().startsWith("Checking") && !text().includes("User-owned review collision") && !text().includes("weekly-20250315"), "graph switch did not clear stale data synchronously");
+    noPlan("graph switch");
     await until(ready, "graph B inspection");
     check(status().includes(maliciousName) && !dialog.querySelector("img") && !window.__jrInjected, "graph name was not rendered as literal text");
     check([...dialog.querySelectorAll(".jr-check strong")].every((node) => node.textContent.endsWith("— missing")), "graph B retained graph A checks");
+    comparison("new");
+    const graphBFingerprint = identifiablePlan();
+    check(graphBFingerprint !== completeFingerprint, "graph switch retained old fingerprint");
+    additions(["create-week-routine", "create-month-routine", "create-templates", "create-daily-default"]);
+    const freshTemplate = planRows()[3];
+    const freshContent = "- یادداشت روزانه\n  template:: daily-default\n  template-including-parent:: false\n  - ## Focus\n  - ## Weekly tasks\n  - ## Monthly tasks\n  - ## Tasks\n  - ## Notes\n  - ## End-of-day review";
+    check(freshTemplate.querySelector("pre").textContent === freshContent, "fresh template multiline content/indentation changed");
+    check(freshTemplate.textContent.includes("Target: page:Templates") && freshTemplate.textContent.includes("after all existing page blocks") && freshTemplate.textContent.includes("direct children"), "fresh template append placement missing");
+    check(getComputedStyle(freshTemplate.querySelector("pre")).whiteSpace === "pre-wrap", "multiline proposal does not preserve whitespace/wrap long lines");
+    check(planRows().slice(0, 3).every((row) => row.querySelector("pre").textContent === "(Empty page — no blocks or sample tasks)"), "fresh graph proposes sample tasks");
+    safetyAndBounds("narrow fresh multiline template and long fingerprint");
+    groups.push("fresh graph: three empty pages and exact multiline six-heading template, append placement and narrow content wrapping");
     const graphBText = text();
     stale.resolve(structuredClone(date));
     await wait(20);
-    check(text() === graphBText, "late graph A response replaced graph B snapshot");
+    check(text() === graphBText && fingerprint() === graphBFingerprint, "late graph A response replaced graph B snapshot/plan");
+    comparison("new");
+    await refreshPlan("graph B comparison baseline");
+    comparison("unchanged");
+    check(identifiablePlan() === graphBFingerprint, "late graph A response contaminated comparison baseline");
     safetyAndBounds("narrow malicious name");
     groups.push("graph switch clears stale data, late response suppression, escaped graph name");
 
+    // Closing during an outstanding inspection must discard its draft and baseline.
+    todayGate = deferred();
+    const beforeClose = calls.filter((call) => call.endsWith("describeToday")).length;
+    refresh.click();
+    await until(() => calls.filter((call) => call.endsWith("describeToday")).length > beforeClose, "pending read before Close");
     close.click();
+    noPlan("Close during pending inspection");
+    todayGate.resolve(structuredClone(date));
+    todayGate = undefined;
+    await wait(20);
+    check(!visible && !ready(), "late closed inspection reopened report");
+    noPlan("late closed inspection");
+    await model.openJournalSetup();
+    comparison("new");
+    check(identifiablePlan() === graphBFingerprint, "close/reopen retained stale pending plan");
+    close.click();
+    noPlan("Close before hidden graph switch");
     graph = { name: "Graph C", path: "/fixture/C" };
     const graphReads = calls.filter((call) => call === "graph").length;
     emitGraph();
@@ -281,13 +473,19 @@ async function browserFixture(source) {
     check(!visible && calls.filter((call) => call === "graph").length === graphReads, "hidden setup inspected or reopened on graph change");
     await model.openJournalSetup();
     check(status().includes("Graph C"), "hidden graph switch not reflected on reopen");
+    comparison("new");
+    check(identifiablePlan() !== graphBFingerprint, "hidden graph switch retained graph B fingerprint");
     graphFailure = true;
     refresh.click();
     await until(() => status().startsWith("Cannot verify the current graph."), "graph error");
     check(!text().includes("PRIVATE HOST ERROR") && !text().includes("weekly-20250315"), "graph error leaked raw error or stale content");
+    noPlan("graph error");
     graphFailure = false;
     refresh.click();
     await until(ready, "graph error recovery");
+    comparison("new");
+    identifiablePlan();
+    safetyAndBounds("graph error recovery");
     groups.push("hidden graph changes and sanitized inspection error/recovery");
 
     todayGate = deferred();
@@ -299,6 +497,7 @@ async function browserFixture(source) {
     await unload();
     await pendingProbe;
     check(!visible && !panel() && !overlay.isConnected && !style.isConnected, "unload retained visible setup DOM/style");
+    noPlan("pending unload");
     check(listeners.size === 0 && unsubscribeCount === 2 && intervals.size === 0, "unload left subscriptions or polling alive");
     const callsAfterUnload = calls.length;
     const showsAfterUnload = showCount;
