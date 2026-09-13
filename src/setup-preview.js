@@ -1,4 +1,4 @@
-const SECTIONS = ["Focus", "Weekly tasks", "Monthly tasks", "Tasks", "Notes", "End-of-day review"];
+import { blockedSetupPlan, createSetupPlan, matchesSetupSection, SETUP_SECTIONS as SECTIONS, snapshotSetupEvidence } from "./setup-plan.js";
 const PAGES = [
   ["templates", "Templates"],
   ["week-routine", "Week Routine"],
@@ -119,12 +119,21 @@ export async function inspectSetup({ sdk, calendar, signal, timeoutMs = 3000 }) 
     const current = await graphInfo();
     if (current.path !== graph.path) throw new Error("The current graph changed during setup inspection; results were discarded.");
   }
-  async function checkedRead(invoke) {
+  async function checkedRead(invoke, snapshot = false) {
     await verifyGraph();
-    const result = await read(invoke);
+    let result = await read(invoke);
+    if (snapshot && result.ok) {
+      try {
+        result = { ok: true, value: snapshotSetupEvidence(result.value) };
+      } catch {
+        result = { ok: false, reason: "Source data is malformed, incomplete, or cannot be safely fingerprinted." };
+      }
+    }
     await verifyGraph();
     return result;
   }
+  const sourceRead = (invoke) => checkedRead(invoke, true);
+  const evidence = { version: 1, graph, pages: {}, template: {} };
 
   const checks = [];
   const warnings = [...LIMITATIONS];
@@ -144,7 +153,8 @@ export async function inspectSetup({ sdk, calendar, signal, timeoutMs = 3000 }) 
   if (!validDate) warnings.push(`Calendar unavailable: ${calendarResult.reason} No period data is inferred.`);
 
   for (const [id, name] of PAGES) {
-    const page = await checkedRead(() => sdk.Editor.getPage(name));
+    const page = await sourceRead(() => sdk.Editor.getPage(name));
+    evidence.pages[name] = { page };
     if (!page.ok) {
       add(id, name, "unavailable", page.reason);
     } else if (page.value === null) {
@@ -154,7 +164,8 @@ export async function inspectSetup({ sdk, calendar, signal, timeoutMs = 3000 }) 
     } else if (name === "Templates") {
       add(id, name, "existing", OWNED);
     } else {
-      const tree = await checkedRead(() => sdk.Editor.getPageBlocksTree(name));
+      const tree = await sourceRead(() => sdk.Editor.getPageBlocksTree(name));
+      evidence.pages[name].tree = tree;
       const blocks = tree.ok ? inspectTree(tree.value) : null;
       if (!blocks) {
         add(id, name, "unavailable", `${OWNED} ${tree.ok ? "Routine tree is malformed, incomplete, or exceeds the inspection limit." : tree.reason}`);
@@ -166,7 +177,8 @@ export async function inspectSetup({ sdk, calendar, signal, timeoutMs = 3000 }) 
     }
   }
 
-  const template = await checkedRead(() => sdk.App.getTemplate("daily-default"));
+  const template = await sourceRead(() => sdk.App.getTemplate("daily-default"));
+  evidence.template.lookup = template;
   let sectionState = "unavailable";
   let sectionDetail = "Template section inspection is unavailable.";
   let blocks = null;
@@ -181,7 +193,8 @@ export async function inspectSetup({ sdk, calendar, signal, timeoutMs = 3000 }) 
   } else {
     add("daily-default", "daily-default", "existing", `${OWNED} Found via supported global template lookup.`);
     const uuid = template.value.uuid;
-    const tree = await checkedRead(() => sdk.Editor.getBlock(uuid, { includeChildren: true }));
+    const tree = await sourceRead(() => sdk.Editor.getBlock(uuid, { includeChildren: true }));
+    evidence.template.tree = tree;
     if (tree.ok && record(tree.value) && tree.value.uuid === uuid) blocks = inspectTree([tree.value]);
     if (!blocks) {
       sectionDetail = tree.ok ? "Template tree is missing, malformed, incomplete, or exceeds the inspection limit." : tree.reason;
@@ -193,12 +206,7 @@ export async function inspectSetup({ sdk, calendar, signal, timeoutMs = 3000 }) 
       add(id, section, sectionState, sectionDetail);
       continue;
     }
-    const expected = section.toLowerCase();
-    const count = blocks.filter((block) => {
-      const actual = title(block.content);
-      return actual === expected ||
-        (["Weekly tasks", "Monthly tasks"].includes(section) && actual.startsWith(`${expected} — `));
-    }).length;
+    const count = blocks.filter((block) => matchesSetupSection(block.content, section)).length;
     add(id, section, count === 0 ? "missing" : count === 1 ? "existing" : "warning",
       count === 0 ? "Expected section was not found in the daily-default tree; no section was added." :
         count === 1 ? "One matching section in the daily-default tree. User-owned; review before any changes." :
@@ -206,5 +214,12 @@ export async function inspectSetup({ sdk, calendar, signal, timeoutMs = 3000 }) 
   }
   await verifyGraph();
   if (signal?.aborted) throw abortError();
-  return { version: 1, graph: { name: graph.name }, calendar: calendarResult, checks, sections: [...SECTIONS], warnings };
+  const report = { version: 1, graph: { name: graph.name }, calendar: calendarResult, checks, sections: [...SECTIONS], warnings };
+  // Hashing is asynchronous too: bound the wait and discard aborts/graph switches
+  // through completion, not just through the last SDK content read.
+  const planned = await read(() => createSetupPlan({ report, evidence }));
+  report.plan = planned.ok ? planned.value : blockedSetupPlan("Setup plan fingerprinting did not complete; refresh and review before planning.");
+  await verifyGraph();
+  if (signal?.aborted) throw abortError();
+  return report;
 }

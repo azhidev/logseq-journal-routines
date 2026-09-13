@@ -16,6 +16,7 @@ export function createSetupController({
   let visible = false;
   let disposed = false;
   let started = false;
+  let previousPlanId;
 
   function cancel() {
     generation += 1;
@@ -34,9 +35,19 @@ export function createSetupController({
     try {
       const report = await inspect({ sdk, calendar, signal: controller.signal });
       if (disposed || !visible || current !== generation) return;
-      view.render({ state: "ready", report });
+      let comparison;
+      if (report.plan) {
+        const nextId = report.plan.id;
+        comparison = !nextId ? "unavailable" : previousPlanId === undefined ? "new" :
+          !previousPlanId ? "unavailable" : nextId === previousPlanId ? "unchanged" : "changed";
+        previousPlanId = nextId;
+      } else {
+        previousPlanId = undefined;
+      }
+      view.render({ state: "ready", report, ...(comparison ? { planComparison: comparison } : {}) });
     } catch (error) {
       if (disposed || !visible || current !== generation) return;
+      previousPlanId = undefined;
       // The inspector sanitizes SDK errors; never render raw graph block text.
       view.render({ state: "error", error: error.message || "Setup inspection failed. Try refreshing." });
     }
@@ -45,6 +56,7 @@ export function createSetupController({
   function close() {
     if (disposed) return;
     visible = false;
+    previousPlanId = undefined;
     cancel();
     view?.render({ state: "idle" });
     sdk.hideMainUI({ restoreEditingCursor: true });
@@ -75,6 +87,7 @@ export function createSetupController({
         label: "Journal & Routines: Open setup preview (read-only)",
       }, open);
       unsubscribe = sdk.App.onCurrentGraphChanged(() => {
+        previousPlanId = undefined;
         cancel();
         view.render({ state: "idle" });
         if (visible) void refresh();
@@ -87,6 +100,7 @@ export function createSetupController({
       if (disposed) return;
       disposed = true;
       visible = false;
+      previousPlanId = undefined;
       cancel();
       void calendar.destroy();
       unsubscribe?.();

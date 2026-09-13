@@ -84,20 +84,27 @@ npm run test:browser -- /usr/bin/google-chrome
 
 The browser fixture bundles the real entry point with a mocked SDK. It checks the initial window, both commands, JR toolbar, narrow/wide geometry, keyboard controls, unavailable-provider recovery, safe text rendering, graph races, and unload cleanup. It does not validate actual Desktop main-UI placement or cross-plugin transport.
 
-**Mock tests and a successful bundle are not live Logseq Desktop transport or lifecycle evidence.** User-supplied Desktop screenshots on 2026-09-11 subsequently confirmed that the setup window renders and the Calendar v1 date check succeeds, displaying Gregorian `2026-09-11`, Jalali `1405-06-20`, `weekly-20260905`, and `monthly-1405-06`. This is evidence for the preview's `getApiInfo` / `describeToday` path, not all four models or provider lifecycle behavior. The screenshots also show existing-template section findings; their accuracy against source content has not been independently checked. Desktop version, exact loaded builds, load order, reload/disable behavior, and command cleanup remain unverified.
+**Mock tests and a successful bundle are not live Logseq Desktop transport or lifecycle evidence.** User-supplied Desktop screenshots on 2026-09-11 subsequently confirmed that the setup window renders and the Calendar v1 date check succeeds, displaying Gregorian `2026-09-11`, Jalali `1405-06-20`, `weekly-20260905`, and `monthly-1405-06`. This is evidence for the preview's `getApiInfo` / `describeToday` path, not all four models or provider lifecycle behavior. The screenshots also show existing-template section findings; their accuracy against source content has not been independently checked. A subsequent screenshot after the provider-disable test instructions shows the preview reporting Calendar unavailable while retaining template-section findings. This confirms the unavailable-result UI, not the exact failure cause, timeout, or recovery. Desktop version, exact loaded builds, load order, re-enable/reload recovery, and command cleanup remain unverified.
 
-### Live Desktop checklist — partial screenshot evidence
+The user subsequently supplied a successful preview again, then this full diagnostic notification:
+
+> Calendar API v1 responded to all probe calls. Today: 2026-09-11 / 1405-06-20. Read-only observation; journal writes remain disabled.
+
+This confirms the normal Desktop path completed all four models (`getApiInfo`, `describeDate`, `describeToday`, `fromJournalDay`) with client validation. The reported preview sequence is available → unavailable → available; recovery specifically **without reloading Journal** was not explicitly confirmed. Remaining lifecycle cases below are separate from this completed normal-path test.
+
+### Live Desktop checklist — partial screenshots and command evidence
 
 Record the Logseq version, OS, both plugin build/source revisions, case, observation, and redacted console output. Do not mark a case passed from a Node test. Use disposable graphs and plugin copies for failure injection; do not edit the working Calendar plugin or personal graph to test incompatibility.
 
 | Case | Action | Expected observation | Evidence |
 | --- | --- | --- | --- |
 | Visible setup | Load version 0.2.0; close/reopen with JR, palette, and Escape; refresh and switch graphs | Setup opens automatically; findings match the current graph; no note content changed; no stale result after switch/close | Partial: window and rendered findings visible in user screenshots; interaction, startup timing, source accuracy, and graph-change checks pending |
-| Preview date transport | Open setup preview with Calendar available | API v1 date check succeeds and displays dates/period keys | User screenshots, 2026-09-11; exact builds/Desktop version not recorded |
+| Preview date transport | Open setup preview with Calendar available | API v1 date check succeeds and displays dates/period keys | User screenshots and later pasted successful preview, 2026-09-11; exact builds/Desktop version not recorded |
+| Full probe, normal path | Run Check Calendar dependency with Calendar available | All four API models and client validations complete | User supplied the full success notification, 2026-09-11 |
 | Consumer first / provider absent | Load only this probe, run its diagnostic command | Unavailable warning within the call timeout; setup can still inspect named resources; no graph changes | Pending |
 | Provider loaded later | Load Calendar without reloading the probe, run command | API v1, fixed sample `2025-03-21` / `1404-01-01`, journal ISO `2025-03-21`, correct local today | Pending |
 | Provider first | Reload both with Calendar loaded first | All four models work across plugin sandboxes | Pending |
-| Disable and re-enable provider | Disable Calendar, run command; re-enable and repeat | Unavailable, then fresh success; no stale success reused | Pending |
+| Disable and re-enable provider | Disable Calendar, run command; re-enable and repeat | Unavailable, then fresh success; no stale success reused | Partial: preview available → unavailable → available and later full-probe success reported; exact disable/re-enable sequence and absence of a Journal reload not explicitly confirmed |
 | Reload provider | Reload Calendar during repeated probe commands | Either complete validated observations or safe failures, then recovery | Pending |
 | Unsupported/malformed provider | In an isolated test provider build with the same ID, change version, then separately return a malformed result; never load both copies together | Incompatibility/validation warning; no fallback | Pending |
 | Rejected/hung model | In the isolated test provider, reject a model call, then leave one unresolved | Actionable rejection/3-second invocation timeout; later checks still recover | Pending |

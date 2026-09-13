@@ -98,7 +98,7 @@ test("returns the exact JSON envelope using only named read APIs and preserves s
   const f = fixture(t);
   const before = JSON.stringify([f.tree, f.routine, f.today]);
   const result = await inspectSetup(f);
-  assert.deepEqual(Object.keys(result), ["version", "graph", "calendar", "checks", "sections", "warnings"]);
+  assert.deepEqual(Object.keys(result), ["version", "graph", "calendar", "checks", "sections", "warnings", "plan"]);
   assert.equal(result.version, 1);
   assert.deepEqual(result.graph, { name: GRAPH.name });
   assert.deepEqual(result.calendar, { state: "available", today: TODAY });
@@ -196,8 +196,11 @@ for (const [label, tree] of BAD_TREES) {
   });
   test(`template malformed children cannot imply missing sections: ${label}`, async (t) => {
     const result = await inspectSetup(fixture(t, { "Editor.getBlock": () => ({ uuid: UUID, content: "", children: tree }) }));
-    // Undefined children are the SDK's valid leaf representation.
-    assert.equal(check(result, "section-focus").state, tree === undefined ? "missing" : "unavailable");
+    // Explicit undefined is non-JSON evidence; omitted children remain valid leaves.
+    assert.equal(check(result, "section-focus").state, "unavailable");
+    assert.equal(result.plan.status, "blocked");
+    assert.equal(result.plan.id, null);
+    assert.deepEqual(result.plan.changes, []);
     safe(result);
   });
 }
@@ -371,6 +374,153 @@ for (const method of ["App.getCurrentGraph", ...READS.map(([name]) => name), "ca
     });
   }
 }
+function identifiedTemplate(sections = SECTIONS) {
+  const root = templateTree();
+  root.children = root.children.filter((item) => sections.includes(item.content.slice(3)));
+  let n = 0;
+  const visit = (items) => items.forEach((item) => {
+    item.uuid = `12345678-1234-1234-1234-${String(++n).padStart(12, "0")}`;
+    visit(item.children ?? []);
+  });
+  visit(root.children);
+  return root;
+}
+const missingRoutinePages = (name) => name === "Templates" ? { name: "templates" } : null;
+
+function privatePlanSafe(report) {
+  for (const value of [SECRET, GRAPH.path, GRAPH.url]) assert.ok(!JSON.stringify(report).includes(value));
+}
+
+test("inspectSetup attaches the exact v1 user-case plan without extra SDK access or source changes", async (t) => {
+  const tree = freeze(identifiedTemplate(["Tasks", "Notes"]));
+  const f = fixture(t, { "Editor.getBlock": () => tree, "Editor.getPage": missingRoutinePages });
+  const before = JSON.stringify(tree);
+  const report = await inspectSetup(f);
+  const plan = report.plan;
+  assert.deepEqual(Object.keys(plan), ["version", "id", "status", "changes", "preserve", "blockers", "requirements"]);
+  assert.equal(plan.version, 1);
+  assert.equal(plan.status, "draft");
+  assert.match(plan.id, /^[a-f0-9]{64}$/);
+  assert.deepEqual(plan.changes.map((change) => change.id), ["create-week-routine", "create-month-routine", "append-focus", "append-weekly-tasks", "append-monthly-tasks", "append-end-of-day-review"]);
+  assert.deepEqual(plan.changes.slice(2).map((change) => change.target), Array(4).fill(`block:${UUID}`));
+  assert.equal(JSON.stringify(tree), before);
+  privatePlanSafe(report);
+  const refreshed = await inspectSetup(f);
+  assert.equal(refreshed.plan.id, plan.id);
+});
+
+test("fresh graph and complete custom graph produce only missing content or no edits", async (t) => {
+  const fresh = await inspectSetup(fixture(t, { "Editor.getPage": () => null, "App.getTemplate": () => null }));
+  assert.equal(fresh.plan.status, "draft");
+  assert.equal(fresh.plan.changes.length, 4);
+  assert.equal(fresh.plan.changes.at(-1).kind, "create-template");
+  assert.equal(fresh.plan.changes.at(-1).content.match(/  - ## /g).length, 6);
+  const complete = await inspectSetup(fixture(t, {
+    "Editor.getBlock": () => identifiedTemplate(),
+    "Editor.getPageBlocksTree": () => [{ uuid: "12345678-1234-1234-1234-123456789012", content: `DONE ${SECRET}`, children: [] }],
+  }));
+  assert.equal(complete.plan.status, "draft");
+  assert.deepEqual(complete.plan.changes, []);
+  privatePlanSafe(fresh); privatePlanSafe(complete);
+});
+
+test("global template UUID remains the destination even without a Templates page", async (t) => {
+  const report = await inspectSetup(fixture(t, {
+    "Editor.getPage": () => null, "Editor.getBlock": () => identifiedTemplate(["Tasks", "Notes"]),
+  }));
+  assert.equal(report.plan.status, "draft");
+  assert.equal(report.plan.changes.length, 6);
+  assert.ok(!report.plan.changes.some((change) => change.target === "page:Templates"));
+});
+
+test("legacy summary can remain available while incomplete UUID evidence blocks the plan", async (t) => {
+  const report = await inspectSetup(fixture(t));
+  assert.equal(check(report, "section-tasks").state, "existing");
+  assert.equal(report.plan.status, "blocked");
+  assert.equal(report.plan.id, null);
+  assert.deepEqual(report.plan.changes, []);
+});
+
+test("nested/duplicate template sections suppress proposals, and unsafe properties have no fingerprint", async (t) => {
+  const tree = identifiedTemplate(["Tasks", "Notes"]);
+  tree.children[0].children.push({ uuid: "12345678-1234-1234-1234-123456789012", content: "## Focus", children: [] });
+  const f = fixture(t, { "Editor.getPage": missingRoutinePages, "Editor.getBlock": () => tree });
+  const nested = await inspectSetup(f);
+  assert.equal(nested.plan.status, "blocked");
+  assert.ok(nested.plan.id);
+  assert.deepEqual(nested.plan.changes, []);
+  tree.properties.invalid = () => SECRET;
+  const malformed = await inspectSetup(f);
+  assert.equal(malformed.plan.id, null);
+  assert.equal(malformed.plan.status, "blocked");
+  privatePlanSafe(malformed);
+});
+
+test("host data is snapshotted before the next asynchronous graph verification", async (t) => {
+  const tree = identifiedTemplate(["Tasks", "Notes"]);
+  const initial = structuredClone(tree);
+  let fetched = false;
+  const report = await inspectSetup(fixture(t, {
+    "Editor.getPage": missingRoutinePages,
+    "Editor.getBlock": () => { fetched = true; return tree; },
+    "App.getCurrentGraph": () => {
+      if (fetched) tree.content += " PRIVATE MUTATION";
+      return { ...GRAPH };
+    },
+  }));
+  const expected = await inspectSetup(fixture(t, { "Editor.getPage": missingRoutinePages, "Editor.getBlock": () => initial }));
+  assert.equal(report.plan.id, expected.plan.id);
+  assert.ok(report.plan.id);
+});
+
+for (const outcome of ["abort", "switch", "timeout"]) {
+  test(`pending SHA-256 completion is guarded against ${outcome}`, async (t) => {
+    const entered = deferred();
+    const waiting = deferred();
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    t.mock.method(crypto.subtle, "digest", async (...args) => {
+      entered.resolve();
+      await waiting.promise;
+      return digest(...args);
+    });
+    const controller = new AbortController();
+    let switched = false;
+    const f = fixture(t, {
+      "Editor.getPage": () => null, "App.getTemplate": () => null,
+      "App.getCurrentGraph": () => ({ ...GRAPH, path: switched ? `${GRAPH.path}-other` : GRAPH.path }),
+    });
+    const pending = inspectSetup({ ...f, signal: controller.signal, timeoutMs: outcome === "timeout" ? 30 : 3000 });
+    await entered.promise;
+    if (outcome === "timeout") {
+      const report = await pending;
+      assert.equal(report.plan.status, "blocked");
+      assert.equal(report.plan.id, null);
+      assert.deepEqual(report.plan.changes, []);
+      assert.match(report.plan.requirements.join(" "), /Templates contents.*not read/);
+      const serialized = JSON.stringify(report);
+      const count = f.calls.length;
+      waiting.resolve();
+      await nextTurn();
+      assert.equal(JSON.stringify(report), serialized);
+      assert.equal(f.calls.length, count);
+    } else {
+      const rejected = assert.rejects(pending, (error) => {
+        if (outcome === "abort") assert.equal(error.name, "AbortError");
+        else assert.match(error.message, /graph changed/);
+        safe(error.message);
+        return true;
+      });
+      if (outcome === "abort") controller.abort(new Error(SECRET));
+      else { switched = true; waiting.resolve(); }
+      await rejected;
+      const count = f.calls.length;
+      waiting.resolve();
+      await nextTurn();
+      assert.equal(f.calls.length, count);
+    }
+  });
+}
+
 for (const timeoutMs of [0, -1, 0.5, NaN, Infinity, "3000", null, 2_147_483_648]) {
   test(`invalid timeout is rejected before reads: ${String(timeoutMs)}`, async (t) => {
     const f = fixture(t);
