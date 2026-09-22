@@ -45,7 +45,7 @@ export function mountSetupView(document, { onRefresh, onClose }) {
     return node;
   }
   element("h1", "Journal & Routines — Setup preview").id = "jr-title";
-  element("p", "Preview build: 0.2.1").className = "jr-muted";
+  element("p", "Preview build: 0.3.0").className = "jr-muted";
   element("p", "Read-only · Journal automation is not enabled").className = "jr-notice";
   element("p", "Inspect the current graph before future setup. Nothing here creates or changes pages, templates, routines, or journals.");
   const actions = element("div");

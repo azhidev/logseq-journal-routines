@@ -78,6 +78,48 @@ function setup(t) {
   };
 }
 
+test("one unload owner covers lazy journal inspection, setup and dependency runtime", async (t) => {
+  const h = setup(t);
+  const preview = { start: t.mock.fn(() => h.order.push("setup")), destroy: t.mock.fn() };
+  const journal = { start: t.mock.fn(() => h.order.push("journal")), destroy: t.mock.fn() };
+  const runtime = await registerProbe(h.sdk, { setup: preview, journal });
+  assert.deepEqual(h.order.slice(0, 6), ["unload", "setup", "journal", "command", "graph", "invoke"]);
+  assert.equal(h.beforeunload.mock.callCount(), 1);
+  await h.unload();
+  assert.equal(journal.destroy.mock.callCount(), 1);
+  assert.equal(preview.destroy.mock.callCount(), 1);
+  assert.equal(runtime.getStatus().state, "disposed");
+});
+
+test("activation starts under the shared unload owner and is destroyed only once", async (t) => {
+  const h = setup(t);
+  const activation = { start: t.mock.fn(async () => h.order.push("activation")), destroy: t.mock.fn() };
+  await registerProbe(h.sdk, { activation });
+  assert.ok(h.order.indexOf("activation") < h.order.indexOf("invoke"));
+  await h.unload();
+  await h.unload();
+  assert.equal(activation.destroy.mock.callCount(), 1);
+});
+
+test("failed asynchronous activation startup cleans up and never starts the probe", async (t) => {
+  const h = setup(t);
+  const activation = { start: async () => { throw new Error("activation failed"); }, destroy: t.mock.fn() };
+  await assert.rejects(registerProbe(h.sdk, { activation }), /activation failed/);
+  assert.equal(activation.destroy.mock.callCount(), 1);
+  assert.equal(h.invokeExternalPlugin.mock.callCount(), 0);
+});
+
+test("journal registration failure cleans up all started components", async (t) => {
+  const h = setup(t);
+  const preview = { start: t.mock.fn(), destroy: t.mock.fn() };
+  const failure = new Error("journal command unavailable");
+  const journal = { start: () => { throw failure; }, destroy: t.mock.fn() };
+  await assert.rejects(registerProbe(h.sdk, { setup: preview, journal }), (error) => error === failure);
+  assert.equal(journal.destroy.mock.callCount(), 1);
+  assert.equal(preview.destroy.mock.callCount(), 1);
+  assert.equal(h.invokeExternalPlugin.mock.callCount(), 0);
+});
+
 test("registers SDK hooks and a read-only command, probes through the real client, and unloads", async (t) => {
   const h = setup(t);
   const runtime = await registerProbe(h.sdk);
@@ -130,10 +172,10 @@ test("manual command reports unavailable/available through provider load order a
     assert.equal(type, loaded ? "success" : "warning");
     if (loaded) {
       assert.match(message, /2025-03-21 \/ 1404-01-01/);
-      assert.match(message, /Read-only observation; journal writes remain disabled/);
+      assert.match(message, /This diagnostic is read-only\. Journal activation is managed separately/);
     } else {
       assert.match(message, /Calendar dependency unavailable: .*provider not loaded/);
-      assert.match(message, /No graph content was changed/);
+      assert.match(message, /This diagnostic did not change graph content/);
       assert.equal(runtime.getStatus().sample, undefined);
     }
   }

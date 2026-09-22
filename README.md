@@ -1,8 +1,138 @@
-# Journal & Routines — read-only setup preview
+# Journal & Routines
 
-Package **0.2.1** includes the draft-plan preview and the **2026-09-14 explicit-open comparison reset fix**. It **opens when the plugin loads**, and can be reopened using the **JR** toolbar button or **Journal & Routines: Open setup preview (read-only)** command. Rebuild and reload; confirm **Preview build: 0.2.1** beneath the heading to identify the loaded UI.
+## 0.4.5 — restrict native journal lookup to pages
 
-This is still a preparation scaffold, not journal automation. The preview inspects existing resources without modifying them. Applying setup, creating journal sections or routine owners, migration, and scheduling graph writes are **not implemented or enabled**.
+The runtime's native-date query previously matched every entity with `:block/journal-day` and a UUID, including ordinary journal blocks. This could falsely report `duplicate-journal` with only one actual journal page. The query now also requires `:block/name`, restricting candidates to pages. Two actual pages sharing a date still block, as do malformed responses. No journal names, dates, content or recovery records are rewritten.
+
+The runtime fixture now models dated blocks instead of silently restricting all date queries to pages. A regression reproduced the exact false `duplicate-journal` pause with one page plus nested notes before the fix. The corrected query passes that scenario and preserves the notes; another regression still rejects a second actual page before further writes. The browser fixture also requires the page-only clause.
+
+Validation for 0.4.5: **825 Node tests**, **7 production activation Chromium groups**, **13 legacy-preview Chromium groups**, build and diff checks passed; runtime diagnostics are clean. Browser tests use a mocked SDK, not live Desktop.
+
+The earlier manual diagnostic query was misleading too: its second date-bearing entity was not restricted to a page, and its scalar rows did not display usefully in the default block/page table. A reported result count from that query is **not evidence of that many duplicate journals**. Do not delete, merge, rename or re-index journals based on it.
+
+Reload and confirm **Build 0.4.5**, then **Refresh status**. If you previously clicked Disable, it remains disabled; review the confirmations and choose **Enable** only when ready to resume approved automation. Existing enabled intent can resume automatically after validation. Live confirmation on the user's graph remains pending.
+
+## 0.4.4 — reconcile Desktop heading metadata
+
+A reproduced setup compatibility bug caused `recovery-conflict` after inserting a template heading: Desktop 0.10.15's Markdown parser adds numeric `heading: 2` to a `##` block's properties, while setup expected an empty property map. Host evidence: [`with-heading-property` and `construct-block`](https://github.com/logseq/logseq/blob/0.10.15/deps/graph-parser/src/logseq/graph_parser/block.cljs#L555-L583). Setup now accepts exactly `{ heading: 2 }` for its six section presets (as well as the existing no-metadata representation). Exact text, UUID, position, absence of children, other properties and the prior-state hash must still match.
+
+Validation for 0.4.4: **823 Node tests**, **7 production activation Chromium groups**, **13 legacy-preview Chromium groups**, build and diff checks passed; setup-service diagnostics are clean. Fixtures now include host-derived heading metadata. New regressions cover all six pending headings, read-only inspection, no duplicate insertion, and rejection of altered metadata/content/identities or unrelated sampled edits. These are automated fixture results, not live Desktop verification.
+
+This does not strip heading metadata from existing snapshots, change checkpoint formats, reset recovery state, or authorize writes automatically. A 0.4.3 checkpoint paused at a successfully inserted heading can be reconciled after reload if no other sampled state changed. Inspection remains read-only; the user must review and approve the remaining setup operations before resuming. Other recovery conflicts still block.
+
+Reload, confirm **Build 0.4.4**, and choose **Refresh status** before approving anything. If the blocker clears, review the remaining additions and backup/legacy confirmations before **Set up & Enable**. If `recovery-conflict` remains, preserve the checkpoint and content for further diagnosis; do not delete or recreate the heading or clear plugin storage. The user's exact live checkpoint has not been inspected, so this is a verified compatibility fix, not a claim that every recovery conflict is resolved.
+
+## 0.4.3 — Desktop page-identity compatibility
+
+The reported `tree-read-failed` exposed an SDK/host argument mismatch. Desktop 0.10.15's `get_page_blocks_tree` passes its argument directly to a lookup accepting a page-name or UUID string; it does not unwrap `{ uuid }`, despite SDK 0.0.17 declaring that form. Discovery, source revalidation and writer tree reads now pass raw UUID strings. The writer's target-page and UUID-collision `getPage` lookups use strings too. UUID-based identity and all existing validation/recovery checks remain intact; failed reads are never treated as empty.
+
+Host evidence: tagged [tree API](https://github.com/logseq/logseq/blob/0.10.15/src/main/logseq/api.cljs#L769-L775), [page lookup](https://github.com/logseq/logseq/blob/0.10.15/src/main/frontend/db/model.cljs#L1040-L1044), and [`get_page`](https://github.com/logseq/logseq/blob/0.10.15/src/main/logseq/api.cljs#L542-L548). Node and browser SDK fixtures now reject object identities for these reads rather than masking the mismatch.
+
+Validation for 0.4.3: **808 Node tests**, **7 production activation Chromium groups**, **13 legacy-preview Chromium groups**, build and diff checks passed. The strict adapter fixture reproduced `tree-read-failed` before the fix and passed afterward. Browser checks use a mocked SDK, not live Desktop.
+
+Reload the plugin, confirm **Build 0.4.3**, then use **Refresh status**. Existing enabled intent is preserved, so enabled automation can resume after validation. Do not delete pages or clear activation/recovery storage. Live Desktop verification of this fix remains pending; continue using a disposable graph for writer validation.
+
+## 0.4.2 — identify the failing read
+
+Runtime and discovery read failures now identify the fixed SDK operation and distinguish rejection, timeout and unsupported response shape. Examples: `owner-query-failed`, `owner-period-shape`, `configuration-shape`, `journal-row-shape`, `tree-read-timeout`. Duplicate native journal identities are reported as `duplicate-journal`, not a generic read failure. Unexpected internal exceptions are identified separately rather than suggesting damaged graph data or more indexing waits.
+
+Only hardcoded operation names and diagnostic codes are shown—never raw SDK errors, page names, paths, UUID values or note contents. Unsupported responses still block; this update does not reinterpret missing data as empty or weaken write checks. The user's live failure remains unidentified until its operation-specific result is observed. Do not delete graph resources in response to these messages.
+
+Validation for 0.4.2: **808 Node tests**, **7 production activation Chromium groups**, build and diff checks passed; runtime diagnostics are clean. Live Desktop compatibility remains unverified.
+
+## 0.4.1 — discovery retry fix
+
+The one-minute automatic scan cooldown no longer replaces the last actual discovery failure with “Graph evidence changed.” Known adapter failures now have distinct sanitized messages/codes (including `invalid-page`, `duplicate-period-owner` and `scan-limit`); unknown responses remain generic and cannot leak graph contents. A cooldown alone is not evidence that graph content changed.
+
+**Refresh status** can explicitly retry discovery immediately, including a failed pre-setup scan while automation is inactive. That pre-setup refresh is read-only and never reuses approval. An explicit Enable attempt also performs fresh discovery instead of getting stuck behind its previous failed attempt. Background callbacks remain throttled and all write authorization/precondition checks remain intact. No graph content was repaired or deleted by this patch; a live graph's underlying scan failure still needs its exact result.
+
+Validation for 0.4.1: **799 Node tests**, **7 production activation Chromium groups**, build and diff checks passed. Runtime diagnostics are clean. These are mocked-SDK checks, not a live Desktop repair verification.
+
+## 0.4.0 — setup, Enable and automatic journals
+
+**This build can write graph content after explicit setup approval. It is no longer a read-only preview.** Target: Logseq Desktop **0.10.15**, Markdown file graphs. Persian Calendar is the only plugin dependency; starter scripts/styles, Habits, Finance and Dashboards are not required.
+
+**Experimental Desktop writer:** automated integration tests pass, but this complete write-enabled build has not been verified inside live Logseq Desktop. Start with a disposable graph. Do not interpret fixture results or a successful Calendar check as proof that personal-graph writes are safe.
+
+### Start here
+
+1. Build/reload this plugin and load Persian Calendar. For an unpacked install, select this folder (with `package.json` and `index.html`), not `dist/`.
+2. Click **JR**, or run **Journal & Routines: Status, setup and Enable / Disable**. Confirm **Build 0.4.5**. Loading no longer opens a preview modal or authorizes writes.
+3. Review the additions. Make a graph backup; confirm there is no overlapping legacy journal automation and that you are using a disposable graph or have completed the relevant live safety checks. These are explicit user declarations, not automatically verified facts.
+4. Choose **Set up & Enable**. Missing routine pages receive the starter tasks; missing daily-default receives the six headings and Persian review prompts. Existing pages—including empty routine pages—are preserved, never reseeded. Missing unambiguous template sections can be appended without replacing existing content.
+5. When the journal template setting is unset, setup uses the verified `App.setCurrentGraphConfigs` API to select `daily-default`, preserving other default-template entries and unrelated settings. A configured custom template or ambiguous definition blocks rather than being silently replaced. If the setter is unavailable, the UI provides the exact manual configuration step.
+6. Logseq remains responsible for creating native journal pages and applying its template. If today's page does not yet exist, open today's journal normally; Journal resumes when the host creates it. It does not guess names or fabricate journal-day metadata.
+
+Once enabled, startup, navigation, relevant database changes, day rollover and wake/resume schedule automatic work. Today initializes period tasks; future journals get structure only. Earlier journals are read when needed to reuse a current-period owner but are **not modified automatically**. A template installed after today's page already existed does not retroactively inject every preset review prompt into that page.
+
+Weekly/monthly owner panes open independently, reusing the host's deduplication and preserving unrelated panes. The auto-open checkbox can be disabled. **Disable** stops new automatic work and persists off without removing generated content. A Calendar failure pauses writes while retaining enabled intent; fresh validation permits recovery without daily reapproval. Setup/status stays accessible through JR rather than reopening on each startup.
+
+### Preservation, execution and recovery
+
+- Existing notes, task completions, Gregorian page identities, loaded owners and block UUIDs are preserved. A loaded owner is not refilled after its tasks are deliberately deleted. Routine edits affect a later new period rather than resetting existing snapshots.
+- `activation-runtime.js` connects the existing engine/reader to `setup-service.js`, `journal-writer.js`, durable `activation-storage.js` and independent `routine-sidebar.js`. `activation-view.js` is the new SDK main UI. Legacy preview components remain available for regression tests, not production startup.
+- Activation keys hash the exact graph path, not the display name or random scan ID. Records use plugin-local IndexedDB with strict transaction durability. Loss/eviction of that browser storage loses activation/recovery metadata; it is not part of an ordinary graph-folder backup. Never clear storage to force a retry of uncertain writes.
+- Graph-scoped Web Locks serialize cooperating same-origin plugin windows. Missing Web Locks or durable storage blocks writes. They do not lock out other profiles, legacy scripts or user edits.
+- Every journal mutation gets fresh graph/date/activation/Calendar and source/owner checks plus narrow operation preconditions. Host-added matching `id::` lines are normalized for comparisons; persisted identities are retained during updates. Conflicting identities block rather than being stripped.
+- Setup has durable preset-operation recovery. The writer records UUIDs, hashes and progress, not private note snapshots. **Confirmed partial journal work can resume only while its original plan is still in memory. After restart, an unfinished writer checkpoint without that plan pauses for explicit recovery review. Fully automatic crash recovery is not implemented.** Uncertain remote writes are never blindly replayed or destructively rolled back.
+- Full owner discovery remains bounded (3,660 pages / 10,000 blocks / 30 seconds) and is throttled to once per minute, except required post-setup rediscovery. Valid target/source evidence is cached for up to 15 minutes and rechecked using targeted reads/indexed claims. Changed evidence pauses until rediscovery; a second target may wait for the retry interval. Oversized/unsupported graphs block, not truncate silently.
+- SDK reads/writes are not atomic transactions. Already-issued calls cannot be cancelled, delayed indexing can obscure concurrent changes, and conservative page-wide preconditions can pause on unrelated edits. This is not a claim of race immunity.
+
+### Legacy coexistence
+
+Do not enable Journal alongside the starter's journal scheduler. `custom.js` also owns unrelated Habits, Finance, bidi and dashboard behavior: **do not simply delete or disable the entire script**. This build neither reliably detects a running legacy script nor automatically splits it. On a legacy graph, disable only the overlapping journal writes/historical migration and resolve overlapping sidebar ownership before confirming setup. No legacy scripts were edited for this release. A clean graph requires none of these conditional legacy steps.
+
+### Validation and remaining live gate
+
+Run from this folder (Node 24 was used):
+
+```sh
+npm ci
+npm test
+npm run build
+npm run test:browser -- /usr/bin/google-chrome
+npm run test:browser:preview -- /usr/bin/google-chrome
+```
+
+Use an installed Chromium executable path. The production browser fixture uses a bounded real-time DevTools session, actual IndexedDB and Web Locks, and a mocked SDK. The preview fixture explicitly bundles legacy preview components, not the production entrypoint.
+
+Validated on **2026-09-19**: **792 Node tests**, **7 production activation Chromium groups**, **13 legacy-preview Chromium groups**, and build. Production coverage includes actual DOM approval → resource writes → journal writes, host-style identity properties, configuration preservation, no-op replay, persisted enabled/disabled state, Calendar pause/recovery, graph isolation, independent panes and shared unload cleanup. Node integration tests additionally cover rollover, future journals, source edits, interrupted writes and uncertainty. **None of these is live Desktop verification.**
+
+Next live check: on a disposable Desktop 0.10.15 graph with only Calendar and Journal, run the complete setup/Enable path; verify page/task identities, next-day owner references, reload, Calendar loss/recovery, graph switch and Disable. Remaining product limits include custom-template choice handling, conservative large-graph support, explicit legacy separation, and restart recovery without the private original plan. Do not call the plugin fully production-ready until these limits and the live gate are addressed.
+
+## Historical implementation notes — 0.3.0 and earlier
+
+The sections below preserve prior work/evidence. References to “read-only”, startup preview, missing executors, old versions and next steps describe those older builds; the 0.4.0 instructions above are authoritative for the current entrypoint.
+
+## Inspect today's journal engine — new in 0.3.0
+
+Run **Journal & Routines: Inspect today's journal engine (read-only)** from the command palette. This is separate from **Refresh preview**, which still inspects only setup resources.
+
+The command:
+
+1. Checks Calendar and selects today's native Gregorian journal day.
+2. Enumerates the graph's SDK page inventory and reads every inventoried page tree, including non-journals, old/future journals, and routine pages. UUID-tuple children are resolved with bounded `getBlock` reads.
+3. Checks page/block identities and managed-property consistency, finds all claims for the requested periods, and blocks duplicate or misplaced owners rather than accepting the first match.
+4. Runs the real journal engine on the normalized snapshot, then rechecks the page inventory, graph context and today's date before reporting.
+5. Shows only page/journal/block counts, proposed insert/update/move/remove counts, and whether each routine owner is existing, new, or absent. **No proposed changes are applied.** Private snapshot/projection data, note bodies, paths and UUIDs are not logged or returned by the command.
+
+The pipeline starts only when this command is invoked—no full-graph scan runs at startup or on a polling timer. It holds graph-change and DB-change listeners through collection and engine planning, then releases them. Edits, graph changes, superseding requests, external cancellation and unload discard pending results; stale/cancelled commands show no late toast. Use an idle disposable Markdown file graph for live verification.
+
+**Bounds:** 3 seconds per SDK invocation, 30 seconds total, up to 3,660 total pages, 10,000 source blocks, 40 tree levels, 4,000,000 content code units and 20,000 SDK calls including graph checks. Exceeding a limit blocks the scan; data is never silently truncated. Large/unsupported graphs may therefore be blocked in this first bounded collector. SDK reads return whole responses, so local bounds cannot prevent the host from initially allocating/transmitting a large response.
+
+Missing routines require an explicit null page lookup consistent with the inventory; failed reads are never treated as empty. Org format, ambiguous aliases, metadata-only/conflicting managed properties and incomplete journal identities are unsupported rather than guessed. The scan covers SDK-visible block trees, not unindexed files. Event subscriptions and repeated metadata reads are **not an atomic snapshot**; missing/delayed events can leave concurrent content edits undetected. Success is diagnostic evidence, not setup approval or permission to write.
+
+Validation for 0.3.0: **601 Node tests**, **13 Chromium mocked-SDK fixture groups**, and build passed. New adapter/normalizer/inspector diagnostics were clean. The browser fixture exercises the bundled command with a strict mocked SDK, including full scans, collision rejection, private-summary-only output, DB-edit cancellation and pending unload. **Actual Desktop response shapes, event delivery and real-graph behavior have not yet been verified for this command.**
+
+## Initial journal/routine engine extraction — 2026-09-14
+
+`src/journal-model.js` extracts the starter's text/tree conventions with direct pure-function parity tests. `src/journal-engine.js` implements Calendar-backed journal projections, stable section/owner identities, routine copying, reference reconciliation, and fail-closed collision handling. Repeated projected execution, task completions, Saturday/Nowruz/month rollover, source edits, malformed data and asynchronous graph-context invalidation are covered by in-memory tests.
+
+See **[ENGINE.md](ENGINE.md)** for the internal engine/adapter APIs, snapshot/result contract, precise safety differences from the starter, and remaining integration work. The initial extraction was offline at 0.2.1; the 0.3.0 command above now supplies SDK-collected graph data. No demo routines or graph-writing controls were added.
+
+Validation: **518 Node tests passed** (93 new engine/model tests), **12 Chromium mocked-SDK fixture groups passed**, build succeeded, and new engine/model source diagnostics were clean. The browser fixture still tests the existing preview—not a live graph-writing engine. No live Desktop engine execution was performed.
+
+**Next implementation work:** build on the collector for setup-specific template/configuration collision checks and legacy-automation detection, then approved per-graph setup/backup and a serialized/revalidated write adapter with partial-failure recovery. Startup/navigation/midnight scheduling and live parity follow. Keep the dependency gate before enabling writes; do not restart extraction or spend another milestone on preview polish.
 
 ## Safety boundary
 
@@ -26,7 +156,7 @@ npm run build
 
 In Logseq Desktop Developer mode, choose **Plugins → Load unpacked** and select this folder, containing `package.json` and `index.html`, not `src/` or `dist/`. Load **Persian Calendar & Experience** separately from its own folder. Either load order should work; the probe retries when Calendar becomes available. Reload this probe after rebuilding.
 
-The setup window should open immediately after loading version 0.2.1. It has **Refresh preview** and **Close** controls; Escape also closes it. Reopen it with **JR** in the toolbar or the command palette action **Journal & Routines: Open setup preview (read-only)**. If you still see no window or JR button, verify that Load unpacked points to this folder and reload this plugin after `npm run build`.
+The setup window should open immediately after loading version 0.3.0. It has **Refresh preview** and **Close** controls; Escape also closes it. Reopen it with **JR** in the toolbar or the command palette action **Journal & Routines: Open setup preview (read-only)**. If you still see no window or JR button, verify that Load unpacked points to this folder and reload this plugin after `npm run build`.
 
 The original diagnostic command remains available:
 
@@ -100,7 +230,7 @@ Run the visible window/entrypoint fixture using an installed Chrome or Chromium 
 npm run test:browser -- /usr/bin/google-chrome
 ```
 
-The browser fixture bundles the real entry point with a strict read-only mocked SDK. It checks the initial window, both commands, JR toolbar, narrow/wide geometry, keyboard controls, unavailable-provider recovery, safe text rendering, graph races, and unload cleanup. Draft-plan coverage includes exact additions/targets, new/unchanged/changed fingerprints, blocked and unidentifiable plans, complete/fresh graphs, multiline content, privacy, and comparison resets. It does not validate actual Desktop main-UI placement or cross-plugin transport.
+The browser fixture bundles the real entry point with a strict read-only mocked SDK. It checks the initial window, all three commands, on-demand graph-to-engine inspection, JR toolbar, narrow/wide geometry, keyboard controls, unavailable-provider recovery, safe text rendering, graph races, and unload cleanup. Draft-plan coverage includes exact additions/targets, new/unchanged/changed fingerprints, blocked and unidentifiable plans, complete/fresh graphs, multiline content, privacy, and comparison resets. It does not validate actual Desktop main-UI placement or cross-plugin transport.
 
 Validated on **2026-09-12** from this plugin folder: `npm test` (**423 passing Node tests**), `npm run test:browser -- /usr/bin/google-chrome` (**12 passing fixture groups**), and `npm run build` (bundle rebuilt). This validates the current draft-plan source, not its placement or SDK behavior in live Desktop.
 
@@ -138,6 +268,7 @@ Record the Logseq version, OS, both plugin build/source revisions, case, observa
 | --- | --- | --- | --- |
 | Visible setup | Load version 0.2.0; close/reopen with JR, palette, and Escape; refresh and switch graphs | Setup opens automatically; findings match the current graph; no note content changed; no stale result after switch/close | Partial: window and rendered findings visible in user screenshots; interaction, startup timing, source accuracy, and graph-change checks pending |
 | Draft plan UI | Reload the latest built bundle; inspect Tasks/Notes-only, complete, and fresh disposable graphs; refresh unchanged and after a source edit; test blockers and close/graph-switch reset | Proposed additions, fingerprint/comparison, preservation rules and blockers match inspected sources; only Refresh/Close; no writes | Partial: user pasted draft plan after Journal reload on 2026-09-12, with six expected additions, fingerprint, preservation rules and read-only controls. Unchanged-comparison state confirmed in user output on 2026-09-13 with both plugins enabled. Changed-source comparison, source accuracy, fresh/complete graphs, blockers and reset interactions remain pending; covered by mocked-SDK fixtures |
+| Real-graph engine inspection (0.3.0) | Run Inspect today's journal engine in an idle disposable Markdown file graph | Bounded scan and safe summary, or actionable blocked result; no writes; graph/edit/unload events discard pending results | Automated Node and bundled Chromium mocked-SDK coverage passed; live Desktop check pending |
 | Preview date transport | Open setup preview with Calendar available | API v1 date check succeeds and displays dates/period keys | User screenshots and later pasted successful preview, 2026-09-11; exact builds/Desktop version not recorded |
 | Full probe, normal path | Run Check Calendar dependency with Calendar available | All four API models and client validations complete | User supplied the full success notification, 2026-09-11 |
 | Consumer first / provider absent | Load only this probe, run its diagnostic command | Unavailable warning within the call timeout; setup can still inspect named resources; no graph changes | Pending |

@@ -1,4 +1,5 @@
-// Real plugin source in Chromium with a strict, read-only SDK fixture.
+// Legacy preview components in Chromium with a strict, read-only SDK fixture.
+// Production activation is covered by validate_activation.cjs.
 // This does not exercise the SDK bridge or claim live Logseq Desktop validation.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -77,6 +78,22 @@ async function browserFixture(source) {
   const routineTrees = Object.fromEntries(["Week Routine", "Month Routine"].map((name, i) => [name,
     [block(50 + i * 2, name, [block(51 + i * 2, "DONE PRIVATE ROUTINE TEXT")])],
   ]));
+  let engineMode = false, engineTreeGate;
+  const dbListeners = new Set();
+  const enginePages = [
+    { id: 200, uuid: uuid(200), name: "private today", "journal?": true, journalDay: 20250321 },
+    { id: 201, uuid: uuid(201), name: "private prior", "journal?": true, journalDay: 20250320 },
+    { id: 202, uuid: uuid(202), name: "week routine", "journal?": false },
+    { id: 203, uuid: uuid(203), name: "month routine", "journal?": false },
+    { id: 204, uuid: uuid(204), name: "private other", "journal?": false },
+  ];
+  const engineTrees = new Map([
+    [uuid(200), [block(210, "## Tasks", [block(211, "PRIVATE engine note")])]],
+    [uuid(201), [block(212, "## Weekly tasks\nroutine-loaded:: weekly-20250315", [block(213, "DONE PRIVATE owner task")])]],
+    [uuid(202), [block(214, "TODO PRIVATE weekly default")]],
+    [uuid(203), [block(215, "TODO PRIVATE monthly default")]],
+    [uuid(204), [block(216, "PRIVATE unrelated note")]],
+  ]);
   let graph = { name: "Graph A", path: "/fixture/A" };
   let available = true;
   let graphFailure = false;
@@ -159,14 +176,32 @@ async function browserFixture(source) {
         return structuredClone(date);
       },
     }),
+    DB: strict("DB", {
+      onChanged(callback) { dbListeners.add(callback); return () => dbListeners.delete(callback); },
+    }),
     Editor: strict("Editor", {
+      async getAllPages() {
+        check(engineMode, "full graph scan ran without explicit command");
+        calls.push("engine-inventory");
+        return structuredClone(enginePages);
+      },
       async getPage(name) {
+        if (engineMode) {
+          check(["Week Routine", "Month Routine"].includes(name), "unexpected engine page lookup");
+          return structuredClone(enginePages.find((page) => page.name === name.toLowerCase()) ?? null);
+        }
         check(["Templates", "Week Routine", "Month Routine"].includes(name), "unexpected page lookup");
         calls.push(`page:${name}`);
         return graph.path === "/fixture/A" && (name === "Templates" || complete)
           ? { name: name.toLowerCase(), uuid: uuid(80 + name.length), properties: { custom: "PRIVATE PAGE PROPERTY" } } : null;
       },
       async getPageBlocksTree(name) {
+        if (engineMode) {
+          check(typeof name === "string" && engineTrees.has(name), "invalid engine tree identity");
+          calls.push("engine-tree");
+          if (engineTreeGate) await engineTreeGate.promise;
+          return structuredClone(engineTrees.get(name));
+        }
         check(["Week Routine", "Month Routine"].includes(name), "unexpected routine read");
         calls.push(`tree:${name}`);
         check(graph.path === "/fixture/A" && complete, "tree read for a missing routine page");
@@ -199,7 +234,10 @@ async function browserFixture(source) {
     check(document.querySelectorAll(".jr-check").length === 10, "expected four setup checks and six sections");
     check(text().includes("User-owned review collision") && !text().includes("PRIVATE ROUTINE TEXT"), "collision summary leaked source content or disappeared");
     check(text().includes("2025-03-21") && text().includes("1404-01-01") && text().includes("weekly-20250315") && text().includes("monthly-1404-01"), "Calendar values missing");
-    check(commands.size === 2 && commandRegistrations === 2, "expected exactly two commands");
+    check(commands.size === 3 && commandRegistrations === 3, "expected exactly three commands");
+    const engineCommand = commands.get("journal-routines-inspect-engine");
+    check(engineCommand?.options.label === "Journal & Routines: Inspect today's journal engine (read-only)", "engine command missing");
+    check(!calls.includes("engine-inventory") && dbListeners.size === 0, "engine must remain idle at startup");
     const open = commands.get("journal-routines-setup-preview");
     const probe = commands.get("journal-routines-check-calendar");
     check(open?.options.label === "Journal & Routines: Open setup preview (read-only)", "setup command missing");
@@ -212,7 +250,7 @@ async function browserFixture(source) {
     check(typeof model?.openJournalSetup === "function" && open.action === model.openJournalSetup, "model and command do not share open action");
     check(unloadRegistrations === 1 && listeners.size === 2 && intervals.size === 1, "combined lifecycle hooks missing");
     check(notices.length === 0, "startup should not show command feedback");
-    groups.push("automatic visible DOM, two commands, JR model/toolbar, read-only summaries");
+    groups.push("automatic visible DOM, three commands, lazy engine, JR model/toolbar, read-only summaries");
 
     const planArea = () => dialog.querySelector(".jr-plan");
     const planRows = () => [...dialog.querySelectorAll("[data-plan-change]")];
@@ -377,7 +415,7 @@ async function browserFixture(source) {
     noPlan("Refresh");
     await until(ready, "Refresh completion");
     comparison("unchanged");
-    check(text().includes("Preview build: 0.2.1"), "loaded preview build is not identifiable");
+    check(text().includes("Preview build: 0.3.0"), "loaded preview build is not identifiable");
     // Model/command opens must reset independently of our Close handler. This
     // also covers repeated host-dispatched opens after an inspection completes.
     for (const reopen of [() => model[anchor.dataset.onClick](), () => open.action()]) {
@@ -488,18 +526,45 @@ async function browserFixture(source) {
     safetyAndBounds("graph error recovery");
     groups.push("hidden graph changes and sanitized inspection error/recovery");
 
+    engineMode = true;
+    const engineSource = JSON.stringify([...engineTrees]);
+    check(await engineCommand.action() === undefined, "command exposed private engine projection");
+    check(notices.at(-1)?.type === "success" && notices.at(-1).message.includes("Scanned: 5 pages, 2 journals") &&
+      notices.at(-1).message.includes("weekly existing, monthly new") && notices.at(-1).message.includes("no writes"), "engine summary missing");
+    check(!JSON.stringify(notices).includes("PRIVATE") && JSON.stringify([...engineTrees]) === engineSource, "engine leaked or mutated source");
+    check(dbListeners.size === 0 && listeners.size === 2, "engine scan leaked listeners");
+    engineTrees.get(uuid(204))[0].content += "\nroutine-loaded:: weekly-20250315";
+    await engineCommand.action();
+    check(notices.at(-1).type === "warning" && notices.at(-1).message.includes("Multiple period owners"), "misplaced duplicate owner not blocked");
+    engineTrees.get(uuid(204))[0].content = "PRIVATE unrelated note";
+    engineTreeGate = deferred();
+    const treeReads = calls.filter((call) => call === "engine-tree").length;
+    const noticeBeforeEdit = notices.length;
+    const dirty = engineCommand.action();
+    await until(() => calls.filter((call) => call === "engine-tree").length > treeReads, "engine pending tree");
+    for (const callback of dbListeners) callback({ blocks: [], txData: [] });
+    await dirty;
+    engineTreeGate.resolve(); engineTreeGate = undefined;
+    await wait(20);
+    check(notices.length === noticeBeforeEdit && dbListeners.size === 0 && listeners.size === 2, "dirty scan published or leaked");
+    engineMode = false;
+    groups.push("manual real-graph adapter/engine command: complete read-only scan, private summary, collision and DB-edit cancellation");
+
     todayGate = deferred();
     const pendingCount = calls.filter((call) => call.endsWith("describeToday")).length;
     refresh.click();
     const pendingProbe = probe.action();
-    await until(() => calls.filter((call) => call.endsWith("describeToday")).length >= pendingCount + 2, "both setup and probe pending before unload");
+    const pendingJournal = engineCommand.action();
+    await until(() => calls.filter((call) => call.endsWith("describeToday")).length >= pendingCount + 3, "setup, probe and engine pending before unload");
     const noticeCount = notices.length;
     await unload();
     await pendingProbe;
+    await pendingJournal;
     check(!visible && !panel() && !overlay.isConnected && !style.isConnected, "unload retained visible setup DOM/style");
     noPlan("pending unload");
-    check(listeners.size === 0 && unsubscribeCount === 2 && intervals.size === 0, "unload left subscriptions or polling alive");
+    check(listeners.size === 0 && dbListeners.size === 0 && unsubscribeCount >= 2 && intervals.size === 0, "unload left subscriptions or polling alive");
     const callsAfterUnload = calls.length;
+    const unsubscribesAfterUnload = unsubscribeCount;
     const showsAfterUnload = showCount;
     const hidesAfterUnload = hideCount;
     todayGate.resolve(structuredClone(date));
@@ -508,13 +573,14 @@ async function browserFixture(source) {
     overlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await model.openJournalSetup();
     await open.action();
+    await engineCommand.action();
     await probe.action();
     emitGraph();
     await unload();
     await wait(31_000);
     check(calls.length === callsAfterUnload && notices.length === noticeCount, "late response/callback/polling performed work after unload");
     check(showCount === showsAfterUnload && hideCount === hidesAfterUnload && !panel(), "retained UI listeners survived unload");
-    check(unsubscribeCount === 2 && intervals.size === 0, "repeated unload was not idempotent");
+    check(unsubscribeCount === unsubscribesAfterUnload && intervals.size === 0, "repeated unload was not idempotent");
     groups.push("combined pending unload, DOM/style/listener/timer cleanup, inert late callbacks");
     check(unexpected.length === 0, `forbidden SDK accesses: ${unexpected.join(", ")}`);
     check(errors.length === 0, `browser errors: ${errors.join("; ")}`);
@@ -528,7 +594,17 @@ async function main() {
   const chrome = process.argv[2];
   assert.ok(chrome, "Usage: node scripts/validate_setup.cjs /path/to/chrome");
   const build = await esbuild.build({
-    entryPoints: [path.resolve(__dirname, "../src/index.js")],
+    stdin: {
+      contents: `import { registerProbe } from './register.js';
+        import { createSetupController } from './setup-controller.js';
+        import { createJournalInspector } from './journal-inspector.js';
+        logseq.ready(() => registerProbe(logseq, {
+          setup: createSetupController({sdk: logseq, document}),
+          journal: createJournalInspector({sdk: logseq}),
+        }));`,
+      resolveDir: path.resolve(__dirname, "../src"),
+      loader: "js",
+    },
     bundle: true,
     format: "iife",
     platform: "browser",
@@ -559,7 +635,7 @@ async function main() {
     const result = JSON.parse(decodeURIComponent(match[1]));
     for (const group of result.groups) console.log(`PASS: ${group}`);
     assert.equal(result.passed, true, JSON.stringify(result, null, 2));
-    console.log(`PASS: ${result.groups.length} browser groups; real bundled entry point, strict mocked SDK. Chromium fixture only—not live Logseq Desktop.`);
+    console.log(`PASS: ${result.groups.length} browser groups; legacy preview harness, strict mocked SDK. Chromium fixture only—not live Logseq Desktop.`);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

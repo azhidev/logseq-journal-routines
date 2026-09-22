@@ -1,14 +1,15 @@
 {
   "name": "logseq-journal-routines",
-  "version": "0.2.1",
+  "version": "0.4.5",
   "private": true,
-  "description": "Visible read-only setup preview and Calendar dependency probe for Journal & Routines.",
+  "description": "Per-graph setup and automatic journal routines with Persian Calendar; experimental Desktop writer.",
   "type": "module",
   "main": "index.html",
   "scripts": {
     "build": "esbuild src/index.js --bundle --format=iife --platform=browser --outfile=dist/index.js",
     "test": "node --test src/*.test.js",
-        "test:browser": "node scripts/validate_setup.cjs"
+    "test:browser": "node scripts/validate_activation.cjs",
+    "test:browser:preview": "node scripts/validate_setup.cjs"
   },
   "dependencies": {
     "@logseq/libs": "0.0.17"
@@ -18,6 +19,6 @@
   },
   "logseq": {
     "id": "journal-routines",
-    "title": "Journal & Routines — Setup Preview"
+    "title": "Journal & Routines"
   }
 }
