@@ -188,6 +188,84 @@ test("existing clean sections move without replacing IDs; exact leaf placeholder
   for (const id of [2, 6]) assert.ok(!h.state.writes.some((op) => op.uuid === uuid(id)));
 });
 
+test("interleaved user roots stay untouched while managed sections move around them", async (t) => {
+  const source = snapshot([
+    block(1, "## Notes"), block(2, "PRIVATE root A", [block(3, "PRIVATE child")]),
+    block(4, "PRIVATE root B"), block(5, "## Tasks"), block(6, "## Focus"),
+  ]);
+  const h = harness(source, await planFor(t, source));
+  const before = clone(source.pages[0].blocks.filter((b) => [uuid(2), uuid(4)].includes(b.uuid)));
+  const result = await h.writer.apply(h.input);
+  assert.equal(result.status, "applied", result.reason);
+  assertProjection(h);
+  assert.deepEqual(h.state.tree.filter((b) => [uuid(2), uuid(4)].includes(b.uuid)), before);
+  assert.ok(!h.state.writes.some((op) => [uuid(2), uuid(3), uuid(4)].includes(op.uuid)));
+  const writes = h.state.writes.length;
+  assert.equal((await h.writer.apply(h.input)).status, "noop");
+  assert.equal(h.state.writes.length, writes);
+});
+
+test("managed permutations preserve adjacent and separated user roots across anchor placements", async (t) => {
+  const orders = [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]];
+  for (const order of orders) for (const gap of [0, 1, 2, 3]) {
+    const sections = [null, "## Notes", "## Tasks", "## Focus"];
+    const roots = order.map((n) => block(n, sections[n]));
+    roots.splice(gap, 0, block(10, "PRIVATE A"), block(11, "PRIVATE B", [block(12, "PRIVATE child")]));
+    roots.push(block(13, "PRIVATE trailing root"));
+    const source = snapshot(roots), h = harness(source, await planFor(t, source));
+    const result = await h.writer.apply(h.input);
+    assert.equal(result.status, "applied", `${order}, gap ${gap}: ${result.reason}`);
+    assertProjection(h);
+    assert.ok(!h.state.writes.some((op) => [10, 11, 12, 13].map(uuid).includes(op.uuid)));
+  }
+});
+
+test("interleaved layout resumes after each committed operation without moving or duplicating user blocks", async (t) => {
+  const source = snapshot([block(1, "## Notes"), block(2, "PRIVATE A"), block(3, "PRIVATE B"), block(4, "## Focus")]);
+  const plan = await planFor(t, source), baseline = harness(source, plan);
+  assert.equal((await baseline.writer.apply(baseline.input)).status, "applied");
+  for (let at = 1; at <= baseline.state.writes.length; at++) {
+    const h = harness(source, plan);
+    h.state.afterWrite = () => { if (h.state.writes.length === at) throw new Error("PRIVATE lost reply"); };
+    assert.equal((await h.writer.apply(h.input)).reason, "uncertain-outcome");
+    h.state.afterWrite = null;
+    assert.equal((await h.makeWriter().apply(h.input)).status, "applied");
+    assertProjection(h);
+    assert.deepEqual(h.state.writes, baseline.state.writes);
+    assert.ok(!h.state.writes.some((op) => [uuid(2), uuid(3)].includes(op.uuid)));
+  }
+});
+
+test("unachievable user sibling reordering is rejected before reads, checkpoint saves or writes", async (t) => {
+  for (const nested of [false, true]) {
+    const users = [block(2, "PRIVATE A"), block(3, "PRIVATE B")];
+    const source = snapshot(nested ? [block(1, "## Notes", users)] : users);
+    const h = harness(source, await planFor(t, source));
+    const tree = nested ? h.input.plan.nextJournal.blocks.find((b) => b.uuid === uuid(1)).children : h.input.plan.nextJournal.blocks;
+    const a = tree.findIndex((b) => b.uuid === uuid(2)), b = tree.findIndex((b) => b.uuid === uuid(3));
+    [tree[a], tree[b]] = [tree[b], tree[a]];
+    const result = await h.writer.apply(h.input);
+    assert.equal(result.status, "blocked");
+    assert.equal(result.reason, "unsafe-order");
+    assert.equal(h.state.reads, 0);
+    assert.deepEqual(h.state.writes, []);
+    assert.deepEqual(h.state.saves, []);
+  }
+});
+
+test("removing a leaf placeholder does not require moving the user's following children", async (t) => {
+  const source = snapshot([block(1, "## Focus", [
+    block(2, "What would make today successful?"),
+    block(3, "PRIVATE focus note", [block(4, "PRIVATE nested note")]), block(5, "DONE my task"),
+  ])]);
+  const h = harness(source, await planFor(t, source));
+  const result = await h.writer.apply(h.input);
+  assert.equal(result.status, "applied", result.reason);
+  assertProjection(h);
+  assert.deepEqual(h.state.writes.filter((op) => op.kind === "remove").map((op) => op.uuid), [uuid(2)]);
+  assert.ok(!h.state.writes.some((op) => [uuid(3), uuid(4), uuid(5)].includes(op.uuid)));
+});
+
 test("historical owners remain read-only; canonical references reparent with retained UUIDs and stale leaves are removed", async (t) => {
   const ownerSource = snapshot([], 20250322);
   const ownerPlan = await planFor(t, ownerSource);

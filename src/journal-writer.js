@@ -102,19 +102,32 @@ async function compile(job, maxOperations) {
       const target = previous?.uuid ?? anchor?.uuid ?? parent ?? job.pageUuid;
       const sibling = Boolean(previous || anchor);
       const before = !previous && Boolean(anchor);
+      function place(block) {
+        const anchorIndex = sibling ? list.findIndex((item) => item.uuid === target) : -1;
+        requireValue(!sibling || anchorIndex >= 0, "unsafe-order");
+        // Deferred user blocks can make the current index differ from the final
+        // index. Hash the actual SDK anchor placement, not that final position.
+        list.splice(sibling ? anchorIndex + (before ? 0 : 1) : 0, 0, block);
+      }
       if (!entry) {
         requireValue(parent !== null || job.managed.has(desired.uuid), "unsafe-insert");
         const content = blockProperty(desired, "routine-loaded") === null ? desired.content : withoutLoaded(desired.content);
         await emit({ kind: "insert", uuid: desired.uuid, target, content,
           options: { sibling, before, isPageBlock: !sibling && parent === null, focus: false, customUUID: desired.uuid } },
-        () => list.splice(position, 0, { uuid: desired.uuid, content, children: [] }));
-      } else if (entry.parent !== parent || entry.position !== position) {
-        requireValue(canMove(entry) && (parent === null || canonicalReference(entry.block)), "unsafe-move");
-        requireValue(target !== job.pageUuid && !indexTree(entry.block.children).has(target), "unsafe-move");
-        await emit({ kind: "move", uuid: desired.uuid, target, options: { before, children: !sibling } }, () => {
-          entry.list.splice(entry.position, 1);
-          list.splice(position, 0, entry.block);
-        });
+        () => place({ uuid: desired.uuid, content, children: [] }));
+      } else if (entry.parent !== parent || (previous
+        ? list[entry.position - 1]?.uuid !== previous.uuid : entry.position !== 0)) {
+        // A user block may be displaced only temporarily by managed siblings or
+        // obsolete placeholders. Never move it to repair that intermediate index;
+        // the final equality check still rejects unachievable orders.
+        if (entry.parent !== parent || canMove(entry)) {
+          requireValue(canMove(entry) && (parent === null || canonicalReference(entry.block)), "unsafe-move");
+          requireValue(target !== job.pageUuid && !indexTree(entry.block.children).has(target), "unsafe-move");
+          await emit({ kind: "move", uuid: desired.uuid, target, options: { before, children: !sibling } }, () => {
+            entry.list.splice(entry.position, 1);
+            place(entry.block);
+          });
+        }
       }
       await arrange(desired.children, desired.uuid);
     }

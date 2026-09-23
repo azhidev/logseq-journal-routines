@@ -310,7 +310,7 @@ test("continued routine/source evidence is checked after each writer mutation, n
     const routine = f.pages.find((p) => p.name === "week routine");
     routine.blocks.push(f.block("PRIVATE concurrent task")); f.afterMutation = null;
   };
-  await f.reviewAndEnable(); reason(f, "writer-blocked");
+  await f.reviewAndEnable(); reason(f, "writer-guard-denied");
   assert.equal(f.native.blocks.length, 1, "no second operation after source edit");
   const key = (await graphIdentity(f.sdk)).key;
   assert.ok(f.data.get(R + key)?.pending);
@@ -325,7 +325,7 @@ test("historical owner tree changes during a write stop it without writing histo
     if (!f.native.blocks.length) return;
     owner.children[0].content = "DONE user edit"; f.afterMutation = null;
   };
-  await f.reviewAndEnable(); reason(f, "writer-blocked");
+  await f.reviewAndEnable(); reason(f, "writer-guard-denied");
   assert.equal(f.native.blocks.length, 1);
   assert.equal(history.blocks[0], owner);
 });
@@ -336,7 +336,7 @@ test("same-session uncertain completion resumes original identities; restart wit
     if (!f.native.blocks.length) return;
     f.afterMutation = null; throw new Error("PRIVATE remote rejection after success");
   };
-  await f.reviewAndEnable(); reason(f, "writer-blocked");
+  await f.reviewAndEnable(); reason(f, "writer-uncertain-outcome");
   const first = f.native.blocks[0].uuid;
   await f.runtime.refresh(); enabled(f);
   assert.equal(f.native.blocks[0].uuid, first);
@@ -411,7 +411,7 @@ test("missing native journal polling uses its indexed date, not exhaustive inven
 test("a mid-write Calendar day change stops before the next operation", async (t) => {
   const f = fixture(t); await f.runtime.start();
   f.afterMutation = () => { if (f.native.blocks.length) { f.day = 20250322; f.afterMutation = null; } };
-  await f.reviewAndEnable(); reason(f, "writer-blocked");
+  await f.reviewAndEnable(); reason(f, "writer-guard-denied");
   assert.equal(f.native.blocks.length, 1);
   await f.advance(); reason(f, "date-changed");
   assert.equal(f.native.blocks.length, 1, "recovery cannot write yesterday even with original plan");
@@ -422,7 +422,7 @@ test("a mid-write new indexed owner claim stops without target self-invalidation
   f.afterMutation = () => {
     if (f.native.blocks.length) { f.queryExtra = [[id(9999), "other page", "monthly-1404-01"]]; f.afterMutation = null; }
   };
-  await f.reviewAndEnable(); reason(f, "writer-blocked"); assert.equal(f.native.blocks.length, 1);
+  await f.reviewAndEnable(); reason(f, "writer-guard-denied"); assert.equal(f.native.blocks.length, 1);
 });
 
 test("Disable during setup cancels further additions and cannot silently enable", async (t) => {
@@ -589,6 +589,20 @@ test("native journal lookup excludes dated blocks, including nested blocks, with
   assert.deepEqual(note, before);
 });
 
+test("existing interleaved notes survive full activation, section ordering and no-op refresh", async (t) => {
+  const f = fixture(t);
+  const roots = [f.block("PRIVATE root A"), f.block("PRIVATE root B", [f.block("PRIVATE child")])];
+  const before = clone(roots);
+  f.native.blocks.push(f.block("## Notes"), ...roots, f.block("## Tasks"), f.block("## Focus"));
+  await f.runtime.start(); await f.reviewAndEnable(); enabled(f);
+  assert.deepEqual(roots, before);
+  assert.deepEqual(f.native.blocks.filter((b) => roots.includes(b)), roots);
+  const writes = f.writes.length;
+  await f.runtime.refresh(); enabled(f);
+  assert.equal(f.writes.length, writes);
+  assert.deepEqual(roots, before);
+});
+
 test("native journal lookup still blocks two actual pages with the same date before further writes", async (t) => {
   const f = fixture(t);
   await f.runtime.start(); await f.reviewAndEnable(); enabled(f);
@@ -612,6 +626,44 @@ test("native journal lookup shape and duplicate identities are distinguished", a
   await f.runtime.refresh(); reason(f, "duplicate-journal");
   assert.equal(f.writes.length, writes);
 });
+
+for (const code of [
+  "busy", "invalid-plan", "invalid-data", "operation-limit", "unsafe-insert", "unsafe-move", "unsafe-remove",
+  "unsafe-update", "unsafe-loaded-transition", "unsafe-order", "uuid-collision", "guard-failed", "guard-denied",
+  "historical-journal", "future-routine-write", "page-conflict", "block-conflict", "read-failed", "read-limit",
+  "unsupported-tree", "precondition-conflict", "uncertain-outcome", "invalid-recovery-record",
+  "recovery-store-failed", "recovery-store-uncertain", "recovery-plan-required",
+]) {
+  test(`writer failure surfaces sanitized ${code} and retains its checkpoint`, async (t) => {
+    const checkpoint = { version: 1, privateSentinel: "PRIVATE checkpoint" };
+    let calls = 0;
+    const f = fixture(t, { writerFactory: ({ recoveryStore }) => ({
+      async apply(input) {
+        calls++;
+        await recoveryStore.save(input.graphKey, checkpoint);
+        return { status: "blocked", reason: code, operationsApplied: 0, recoveryRequired: true, error: "PRIVATE host error" };
+      },
+    }) });
+    await f.runtime.start(); await f.reviewAndEnable();
+    const expected = code === "recovery-plan-required" ? code : `writer-${code}`;
+    reason(f, expected);
+    if (code !== "recovery-plan-required") assert.ok(f.runtime.getStatus().message.includes(`[${expected}]`));
+    assert.ok(!JSON.stringify(f.runtime.getStatus()).includes("PRIVATE"));
+    assert.equal(calls, 1);
+    assert.equal(f.native.blocks.length, 0);
+    const key = (await graphIdentity(f.sdk)).key;
+    assert.deepEqual(f.data.get(R + key), checkpoint);
+  });
+}
+
+for (const code of ["PRIVATE unknown writer error", "__proto__", "page-read-failed", null]) {
+  test(`unknown writer reason ${JSON.stringify(code)} falls back without leaking host data`, async (t) => {
+    const f = fixture(t, { writerFactory: () => ({ apply: async () => ({ status: "blocked", reason: code }) }) });
+    await f.runtime.start(); await f.reviewAndEnable(); reason(f, "writer-blocked");
+    assert.ok(!JSON.stringify(f.runtime.getStatus()).includes("PRIVATE"));
+    assert.equal(f.native.blocks.length, 0);
+  });
+}
 
 test("unexpected internal failures do not masquerade as graph read corruption", async (t) => {
   const f = fixture(t, { setupFactory: () => ({ inspect: async () => { throw new Error("PRIVATE internal state"); } }) });

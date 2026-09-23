@@ -1,6 +1,6 @@
 {
   "name": "logseq-journal-routines",
-  "version": "0.4.5",
+  "version": "0.4.7",
   "private": true,
   "description": "Per-graph setup and automatic journal routines with Persian Calendar; experimental Desktop writer.",
   "type": "module",

@@ -42,9 +42,38 @@ const SHAPE_MESSAGES = Object.fromEntries(Object.entries({
   "journal-query-shape": "The native journal query did not return a row array",
   "journal-row-shape": "The native journal query did not return a single UUID field per row",
 }).map(([key, message]) => [key, `${message} [${key}]. The response shape needs compatibility review; no values or note contents are exposed.`]));
+const WRITER_MESSAGES = Object.fromEntries(Object.entries({
+  "busy": "Another call is using this journal writer",
+  "invalid-plan": "The journal plan failed validation before execution",
+  "invalid-data": "Journal execution encountered unsupported data or an internal failure",
+  "operation-limit": "The journal plan exceeds the bounded operation budget",
+  "unsafe-insert": "The plan requests an insertion outside the writer's permitted scope",
+  "unsafe-move": "The plan requests a move the writer cannot safely perform",
+  "unsafe-remove": "The plan requests a deletion the writer cannot safely perform",
+  "unsafe-update": "The plan requests a text change outside the writer's permitted scope",
+  "unsafe-loaded-transition": "The plan would change an existing routine-owner marker",
+  "unsafe-order": "The compiled operations do not reproduce the approved block order",
+  "uuid-collision": "A proposed new block identity is not confirmed absent",
+  "guard-failed": "The journal write safety check failed or timed out",
+  "guard-denied": "The journal write safety check no longer authorizes this operation",
+  "historical-journal": "The target journal is now in the past",
+  "future-routine-write": "The plan would write routine tasks into a future journal",
+  "page-conflict": "The target page identity or journal date changed",
+  "block-conflict": "Block identity or page-membership verification failed",
+  "read-failed": "A writer SDK read failed or its response could not be normalized",
+  "read-limit": "A writer read exceeds the bounded block or text budget",
+  "unsupported-tree": "The writer cannot verify the returned tree shape or depth",
+  "precondition-conflict": "The target journal does not match the expected state before continuing",
+  "uncertain-outcome": "An SDK write failed, timed out, or its expected result was not verified",
+  "invalid-recovery-record": "The saved writer checkpoint does not match the original plan",
+  "recovery-store-failed": "Durable writer checkpoint storage failed",
+  "recovery-store-uncertain": "A checkpoint storage operation has an uncertain outcome; this writer is stopped",
+}).map(([reason, message]) => [`writer-${reason}`,
+  `${message} [writer-${reason}]. Keep this session open and preserve existing content and any checkpoint; do not clear storage to retry.`]));
 const MESSAGES = {
   ...READ_MESSAGES,
   ...SHAPE_MESSAGES,
+  ...WRITER_MESSAGES,
   "runtime-unexpected": "An unexpected plugin operation failed [runtime-unexpected]. This is not evidence of graph corruption; do not delete pages.",
   "calendar-unavailable": "Enable or reload Persian Calendar, then refresh status. Enabled intent is preserved.",
   "locks-unavailable": "Web Locks are unavailable in this host. Writes are disabled because cross-window serialization cannot be established.",
@@ -497,7 +526,9 @@ export function createActivationRuntime({
     await validate(authority, true);
     await checkEvidence(job.evidence);
     const result = await writer.apply(job.input); live(token);
-    requireValue(["applied", "noop"].includes(result.status), result.reason === "recovery-plan-required" ? result.reason : "writer-blocked");
+    const writerReason = typeof result.reason === "string" && Object.hasOwn(WRITER_MESSAGES, `writer-${result.reason}`)
+      ? `writer-${result.reason}` : "writer-blocked";
+    requireValue(["applied", "noop"].includes(result.status), result.reason === "recovery-plan-required" ? result.reason : writerReason);
     originals.delete(key);
     const target = await pageTree(job.name);
     requireValue(target && equal(target.blocks, job.input.plan.nextJournal.blocks), "source-changed");

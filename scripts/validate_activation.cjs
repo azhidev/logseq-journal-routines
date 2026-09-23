@@ -42,7 +42,10 @@ async function fixture(source) {
       format: 'markdown', properties: {}, blocks, ...(day === undefined ? {} : { journalDay: day }) };
     pages.push(p); return p;
   }
-  const today = page('Native host journal', 20250321);
+  const userRoots = [block('PRIVATE journal root A'), block('PRIVATE journal root B')];
+  userRoots[1].children.push(block('PRIVATE nested journal note'));
+  const userRootsBefore = JSON.stringify(userRoots);
+  const today = page('Native host journal', 20250321, [block('## Notes'), ...userRoots, block('## Tasks'), block('## Focus')]);
   const privatePage = page('User notes', undefined, [block('PRIVATE NOTE <img src=x onerror="window.injected=true">')]);
   const privateBefore = JSON.stringify(privatePage);
   const meta = (p) => { if (!p) return null; const { blocks, ...rest } = p; return clone(rest); };
@@ -170,6 +173,7 @@ async function fixture(source) {
     check(today.blocks.filter((b) => b.properties['routine-loaded']).length === 2, 'missing period owners');
     check(panes.size === 3 && panes.has('unrelated-pane'), 'sidebar cleared or missing owners');
     check(JSON.stringify(privatePage) === privateBefore && !window.injected, 'private content changed/injected');
+    check(JSON.stringify(today.blocks.filter((b) => userRoots.includes(b))) === userRootsBefore, 'interleaved journal notes changed');
     check(!document.querySelector('.jr-activation').textContent.includes('PRIVATE'), 'private content exposed');
     groups.push('approved setup, automatic template selection, host id-property roundtrip, real journal writes, independent panes');
     const count = writes, before = JSON.stringify(pages), scansBefore = scans;
