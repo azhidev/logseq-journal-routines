@@ -10,7 +10,7 @@ Previous experimental versions were not deployed and do not require backward com
 
 ## Product contract
 
-[SCOPE.md](SCOPE.md) is the authoritative specification: approved decisions, the remaining week-start clarification, history access, performance constraints, non-goals and acceptance criteria. Contributors and coding agents must also read [AGENTS.md](AGENTS.md).
+[SCOPE.md](SCOPE.md) is the authoritative specification: approved decisions, history access, performance constraints, non-goals and acceptance criteria. No product clarification remains. Contributors and coding agents must also read [AGENTS.md](AGENTS.md) and start implementation with [NEXT_SESSION.md](NEXT_SESSION.md).
 
 The agreed direction is:
 
@@ -25,7 +25,7 @@ The agreed direction is:
 - Preserve previous calendar periods when switching calendars; do not convert, merge or delete them.
 - Enable separately for each graph and respect other sidebar panes and manual pane closure.
 
-The intended initial week starts are Saturday for Jalali and Monday for Gregorian; the user's second calendar label needs clarification before this mapping is considered confirmed. See SCOPE D2.
+Confirmed week starts: **Saturday for Jalali/Persian and Monday for Gregorian**. Weeks remain independent of month boundaries.
 
 ## Lightweight by design
 
@@ -35,7 +35,7 @@ Minimal creation-state handling and focused tests are still required to avoid du
 
 ## Next implementation steps
 
-1. Resolve the week-start wording and finalize deterministic period identities and narrow task-copy rules.
+1. Follow the next-session handoff and finalize deterministic period identities and narrow task-copy rules without reopening approved product decisions.
 2. Replace the experimental journal runtime, reusing only components that simplify this contract; remove obsolete paths, tests and dependencies.
 3. Deliver the Gregorian routine/sidebar path, then Jalali support, simple calendar switching and history access.
 4. Test data preservation, interrupted creation, calendar boundaries, graph isolation, sidebar behavior and idle work.

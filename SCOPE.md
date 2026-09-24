@@ -1,7 +1,7 @@
 # Journal & Routines — product contract
 
-Updated: 2026-09-23
-Status: **Product direction approved; one week-start wording clarification remains (D2).**
+Updated: 2026-09-24
+Status: **Product direction approved; no outstanding user clarification.**
 Implementation status: this contract does not claim the new runtime is implemented.
 
 ## Authority and purpose
@@ -22,7 +22,7 @@ The user confirms previous experimental versions have not been deployed. There i
 
 Finalize deterministic page names and ownership properties before implementing creation. Identity must include calendar, period kind and civil bounds; localized titles and week numbers are presentation, not identity. A same-name unrelated page is a collision, never permission to overwrite it.
 
-## D2 — Calendar and independent weeks [partly awaiting wording clarification]
+## D2 — Calendar and independent weeks [approved]
 
 Approved:
 - Gregorian mode is the default and needs no Persian Calendar plugin.
@@ -30,10 +30,7 @@ Approved:
 - A weekly period is seven days, independent of month/year boundaries. A new month must not split or reset an existing week.
 - A monthly period is a calendar month, not a rolling 30-day window.
 
-One open clarification:
-- The recommendation was **Saturday for Jalali/Persian, Monday for Gregorian**.
-- The user approved independent weeks but wrote “Saturday for Shamsi, Monday for Jalali.” Shamsi and Jalali are the same calendar, so the second label is ambiguous.
-- Confirm that “Gregorian” was intended for Monday. Do not silently record that correction as already confirmed. This does not reopen independent weeks or the other approved decisions.
+Confirmed week starts: **Saturday for Jalali/Persian, Monday for Gregorian**. The user explicitly corrected the earlier calendar-label typo; this decision is settled.
 
 No configurable week-start framework is needed in the first release. Today uses the device's local civil date, not UTC; timezone changes never rewrite existing period content.
 
@@ -123,7 +120,7 @@ No daily template management, daily journal restructuring, habit/finance integra
 
 ## Delivery order
 
-1. Resolve only the D2 wording; settle deterministic page/metadata names and narrow cloning/creation rules. Keep this contract updated without reopening approved decisions.
+1. Follow `NEXT_SESSION.md`; settle deterministic page/metadata names and narrow cloning/creation rules as implementation details. Keep this contract updated without reopening approved decisions.
 2. Inspect the current implementation; identify reusable components and remove obsolete Journal paths/tests/dependencies as their replacement is implemented. Do not preserve a parallel legacy product.
 3. Deliver Gregorian activation, definition pages, safe current period snapshots and native sidebar panes, without journal writes.
 4. Add Jalali via Persian Calendar, straightforward calendar switching and the on-demand history entry point.
@@ -149,4 +146,6 @@ No daily template management, daily journal restructuring, habit/finance integra
 
 ## Decision record
 
-2026-09-23: User approved independent period pages, independent weeks, current sidebar context, per-period snapshots without carry-forward, current-period-only creation, simple optional-calendar handling with data preservation, and recommended setup/sidebar behavior. User additionally required convenient history access and explicitly rejected preserving unused experimental versions or backward compatibility. Lightweight operation remains a core priority. Week-start wording is the sole user clarification pending; the proposed native history page is documented as an implementation recommendation, not a separately user-specified UI.
+2026-09-23: User approved independent period pages, independent weeks, current sidebar context, per-period snapshots without carry-forward, current-period-only creation, simple optional-calendar handling with data preservation, and recommended setup/sidebar behavior. User additionally required convenient history access and explicitly rejected preserving unused experimental versions or backward compatibility. Lightweight operation remains a core priority. The proposed native history page is an implementation recommendation, not a separately user-specified UI.
+
+2026-09-24: User explicitly confirmed Saturday for Jalali/Persian and Monday for Gregorian and requested preparation for implementation in a new session. No product clarification remains. This session prepares documentation and the handoff only; runtime replacement belongs to the next session.
