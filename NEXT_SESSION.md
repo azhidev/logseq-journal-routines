@@ -1,90 +1,106 @@
-# Next session — implement lightweight routines
+# Next session — Desktop validation and release hardening
 
-Prepared: 2026-09-24
-Status: **Ready to implement. No outstanding product clarification.**
+Updated: 2026-09-27
+Status: **Lightweight runtime implemented; development alpha, not production-ready.**
 
 ## Start here
 
-Read `AGENTS.md`, then `SCOPE.md`. SCOPE is the single product contract; this file is an execution handoff, not another specification. The user requested preparation only in the preceding session. Start implementing in the next session rather than repeating design discussions or extending the previous journal writer.
+Read `AGENTS.md`, `SCOPE.md` and `README.md`. Product decisions remain settled. Do not restore the old journal writer or repeat product planning. The runtime now uses independent native period pages, optional Jalali, per-graph setup, localized-first page titles for new periods, editable summary-block sidebar requests without a visible `Tasks` heading, guarded Persian starters for fresh default definitions, an explicit action for older empty periods and an on-demand native history page.
 
-Confirmed: **Saturday-start Jalali weeks; Monday-start Gregorian weeks; both independent of month boundaries.** Gregorian works alone, Jalali uses Persian Calendar. Current weekly/monthly snapshots live in independent native pages shown in the right sidebar. History must remain accessible. No journal/template changes, automatic carry-forward, missed-period backfill or backward compatibility with experimental versions.
+`plugins/journal-routines/` is a separate repository. Inspect its uncommitted working tree and preserve unrelated work. The disposable `draft2` graph is not a Git repository: its native default-journal template and technical-property visibility config were updated on user request, but its already-created period pages and user journal data were not edited directly while Logseq was running. No commits or branches were created.
 
-## What has and has not changed
+## Source map
 
-- Product decisions and lightweight constraints are recorded in `SCOPE.md`.
-- README no longer presents a sequence of experimental releases. Parent implementation/roadmap entry points refer here and to SCOPE.
-- The old ENGINE guide has been replaced with a redirect so it cannot masquerade as the new architecture.
-- **Runtime code is still the old implementation. No lightweight runtime was implemented or built during preparation.** Existing `dist/` is not a build of the new design.
-- No graph notes, tasks, starter scripts, plugin state or other plugins were changed during preparation.
-- No commits, branches or dependency installations were made for this handoff.
-
-## Repository and working-tree boundaries
-
-`plugins/journal-routines/` is a separate Git repository, ignored by the parent starter repository. Its sibling `plugins/persian-calendar/` provides the Jalali API. Do not accidentally stage plugins into the parent or assume a starter clone includes them.
-
-Inspect both working trees before edits. At the last preparation check, these Journal files already had uncommitted implementation changes, predating this documentation work:
-
-- `package.json`, `package-lock.json`
-- `scripts/validate_activation.cjs`
-- `src/activation-runtime.js`, `src/activation-runtime.test.js`
-- `src/journal-writer.js`, `src/journal-writer.test.js`
-
-README is modified; AGENTS/SCOPE were new untracked files, and this handoff is also new. Parent `PLUGIN_ROADMAP.md` and `README.md` were already modified; `JOURNAL_ROUTINES_IMPLEMENTATION.md` is untracked. Recheck rather than assuming this inventory is still current. Do not reset the repositories.
-
-The user explicitly authorizes deleting/replacing obsolete Journal implementation, tests, dependencies and docs, even without backward compatibility. That does not authorize discarding unrelated work or erasing graph content. Do not retain old recovery workflows merely because they exist; do not clear storage or touch personal graphs as a shortcut to cleanup.
-
-## Focused source entry points
-
-All paths below are relative to this plugin unless noted.
-
-| Path | Purpose for the next session |
+| File | Responsibility |
 | --- | --- |
-| `package.json`, `index.html` | Build, dependencies and plugin loading. Current entry bundle is `dist/index.js`. |
-| `src/index.js`, `src/register.js` | Replace production wiring and old commands. Current entrypoint imports the activation runtime and journal inspector. |
-| `src/calendar-client.js`, its tests | Inspect for reusable Persian Calendar transport/validation; Gregorian startup must not require it to be ready. |
-| `../persian-calendar/README.md`, `../persian-calendar/src/` | Verify the provider's actual API and civil period semantics; do not duplicate Jalali conversion or alter the provider unnecessarily. |
-| `src/routine-sidebar.js`, its tests | Evaluate native sidebar helpers; remove journal-owner coupling where needed. |
-| `src/activation-*`, `src/setup-*`, `src/runtime.js` | Audit for replacement/removal. Do not port the old setup and activation framework wholesale. |
-| `src/journal-*`, `src/graph-normalize.js` | Old model/engine/writer/discovery. Keep only narrowly useful code; journal projection, historical owner scans and daily references are not part of the replacement. |
-| `scripts/validate_activation.cjs`, `scripts/validate_setup.cjs` | Old browser fixtures; replace relevant flows and remove preview-only coverage/scripts once obsolete. |
+| `src/index.js`, `src/register.js` | Production entrypoint, toolbar/palette commands, lazy setup UI and lifecycle cleanup |
+| `src/routines-view.js` | Dependency-free setup, per-graph approval and inline calendar confirmation |
+| `src/routines-runtime.js` | Graph-pinned serialized actions, explicit guarded examples, Persian Calendar presentation, settings, current periods, sidebar, day/resume lifecycle |
+| `src/period-model.js` | Local civil date, Gregorian periods, calendar-qualified identities and ownership |
+| `src/period-snapshot.js` | Header-aware copying, durable native summary root, interrupted creation verification and preservation |
+| `src/routine-history.js` | On-demand native history page and queries |
+| `src/activation-storage.js` | Reused IndexedDB metadata storage and exact-path graph identity |
+| `src/calendar-client.js` | Reused validated Persian Calendar API transport |
+| `scripts/validate_routines.cjs` | Chromium assembled-plugin fixture, not a live Logseq host |
 
-These are inspection candidates, not a claim that their current APIs suit the new design. Read focused code and SDK contracts before edits. Do not spend the next session fixing an old writer bug that disappears with the approved replacement.
+## Confirmed host-source findings — do not regress
 
-## Execution order
+Official Logseq tag **0.10.15** was inspected:
 
-1. **Inspect and choose the small model.** Determine exact period page names/metadata and definition-copy rules. Record choices in SCOPE as engineering details; no renewed product questionnaire. Identity must distinguish calendar/kind/civil bounds and avoid overwriting an unrelated same-name page. Design minimal repeat-safe creation and preservation of deliberate deletions before writes.
-2. **Implement the Gregorian vertical slice.** Graph-scoped Enable, empty or selected definition pages, one current week/month snapshot, native sidebar panes, Show current routines, auto-open preference and Disable. No Persian Calendar readiness dependency, template editing or journal scanner.
-3. **Add Jalali and history.** Use the real Calendar API; pause new creation clearly if unavailable. Calendar switching is one confirmation, preserving/reusing existing periods. Implement the recommended native history page with weekly/monthly lists, newest first, queried only when opened; verify target-host query behavior instead of inventing it.
-4. **Remove superseded paths.** Remove unused runtime branches, commands, setup/preview/writer code, tests of discarded behavior and dependencies. Update package scripts/metadata and regenerate the lockfile only as needed. Do not ship a parallel legacy mode. Keep unrelated plugins and starter features unchanged.
-5. **Validate and document actual behavior.** Exercise the checklist below, build the new bundle, record measured bundle cost/SDK-call behavior and update README with accurate usage. Retire/update this handoff once it no longer describes the checkout.
+- `src/main/frontend/handler/page.cljs` (`build-page-tx`, lines 101–123) creates a properties **pre-block** even with `createFirstBlock:false`.
+- `src/main/frontend/handler/editor.cljs` (`properties-block`, lines 658–674) gives it its own UUID/ID and page/parent/left references. `getPageBlocksTree` includes it.
+- `src/main/logseq/api.cljs` (`upsert_block_property`, lines 742–744) targets the supplied block; it does not redirect a page UUID to its header.
+- Direct pre-block property updates need not immediately mirror into `getPage().properties` (`frontend/modules/outliner/core.cljs`, `Block.-save`). Read mutable checkpoints from the header itself. Keep immutable ownership/plan metadata verified against the page.
+- SDK normalization can expose `preBlock`; raw/preBlock? aliases are also checked. The first content root follows the header ID, not the page ID.
+- DataScript 1.5.3 supports the query's `get`, `str`, `contains?` and equality functions; host query transforms receive flattened page results. That source audit is **not** a Desktop query execution result.
 
-These are implementation steps, not separate preview-only deliveries. Seek a usable end-to-end plugin; do not stop after another inspector or setup mock. If one live-host check is blocked, finish independent work and state the specific unverified behavior.
+Initial mocks incorrectly assumed empty trees after page creation with properties and page-UUID property writes. Those assumptions were corrected in runtime, snapshot, history and browser fixtures. Do not simplify tests back to them.
 
-## Validation checklist
-
-Use isolated fixtures and disposable graphs, never personal notes for failure injection.
-
-- Gregorian works without Calendar; Jalali uses Saturday weeks and actual Jalali months. Gregorian weeks start Monday. Include month-crossing weeks, leap boundaries and Nowruz.
-- Repeated activation, duplicate triggers and reload create no duplicate snapshots or reset completions.
-- Interrupted creation reconciles or pauses without destructive rollback. Failed reads are not treated as absence.
-- Editing definitions affects future periods only; nested content survives, task identities are fresh, deleted tasks stay deleted and unfinished tasks stay in their old periods.
-- Reopening after missed weeks creates only the current periods. Calendar switching and switching back preserve/reuse both calendars' history.
-- The sidebar always targets current periods; historical links open original pages without creating new snapshots. Preserve unrelated panes and respect manual closure.
-- Graph switch/Disable/unload stop stale queued work and release listeners/timers. No activation leaks between graphs.
-- Idle work does not repeatedly query/write; rollover uses targeted resources. Increasing unrelated graph history must not cause a full-graph scan. History is on demand.
-- No daily journal/template/global configuration edits are needed; obsolete experimental compatibility paths are absent from the production bundle.
-
-Current package scripts, verified during preparation (recheck after cleanup):
+## Actual validation completed
 
 ```sh
-npm test
-npm run build
+npm test                 # 490 passed after text-metadata creation fix
+npm run test:browser     # 18 Chromium fixture checks passed after that fix
+npm run build            # passed after that fix
 ```
 
-The current browser scripts are `test:browser` and `test:browser:preview`; they target old behavior and are not proof of the replacement. Inspect/update them and discover the available Chromium executable before running browser checks. Do not invent a browser path or preserve the preview script just to keep an old test count.
+Current bundle is approximately 274 KB, including SDK, unminified (gzip size not remeasured after caption changes). Chromium executable in this workspace: `/usr/bin/google-chrome` (rediscover if the environment changes).
 
-Report commands actually run, relevant failures, current test results and actual Desktop checks separately. Prior experimental test totals are not evidence for the new product. Do not claim real Desktop validation from a mocked SDK.
+Automated coverage includes Gregorian/Nowruz boundary fixtures, nested task copies, stale page-property mirrors, metadata collisions, interrupted writes, user edits/deletions, graph changes during writes, calendar switching/back, dependency absence, native history generation, duplicate triggers, rollover, idle call counts and listener cleanup. Real Chromium IndexedDB persistence is exercised separately from fake task/graph APIs.
 
-## Ready-to-use next-session prompt
+## Remaining release gate — actual Logseq Desktop
 
-> Implement the lightweight Journal & Routines plugin. Read `plugins/journal-routines/AGENTS.md`, `SCOPE.md`, and `NEXT_SESSION.md` first. Product decisions are settled: Saturday for Jalali and Monday for Gregorian; independent period pages in the native sidebar; current periods plus on-demand history; Gregorian standalone and Persian Calendar only for Jalali. Replace/remove obsolete experimental Journal code without backward compatibility, preserving user graph data and unrelated work. Start the implementation and validate the complete path, not another planning/preview milestone. Keep the plugin lightweight and report actual validation and remaining live-host limits.
+User screenshots of disposable graphs confirmed the manifest icon/toolbar, enabled Jalali page creation, and (in `draft4`) native compact summary-block panes ordered weekly above monthly, with period labels **inside** those panes and technical page names as native headers. Later screenshots show the localized page-title/starter-task build and editable compact panes in Desktop, but also exposed mixed-direction ordering in the Jalali captions. The RTL caption/separately isolated Gregorian date fix is built and fixture-tested, not yet verified in Desktop. A later screenshot of the next day shows a metadata-bearing full monthly page pane and a separate `jr-snapshot-state` pane. The runtime's fallback from an unverified planned summary to the full page has now been removed, but this fix and the cause of the separate pane still require live Desktop verification. Never auto-close unrelated sidebar panes or delete graph metadata. Manual example insertion and the `draft2` daily template also remain unverified in Desktop. Logseq is running as a Flatpak, but no `logseq` command was found on PATH here. Do not edit its open period Markdown files behind the host or use personal notes for failure injection.
+
+1. Reload the rebuilt plugin from its project root on a **fresh disposable** Markdown graph. Choose Jalali, then Enable with both default definition pages absent. The SDK should create two editable Persian TODOs in each definition and each current period, with a nonprinting grouping anchor rather than a visible `Tasks` heading. Do not reset/delete old periods or storage to simulate a fresh graph. Existing/selected definition pages remain untouched, and older named period pages stay under their original names.
+2. Verify weekly above monthly and localized **native pane headers** beginning `هفتهٔ ۲۸ · ۱۴۰۵` / `مهر ۱۴۰۵`, with the civil start as a unique suffix. The pane should show the two Persian TODOs without a `Tasks` heading, repeated period label or prominent `jr-*` properties. Test on the following day/reload as well: an unverified summary must pause with a warning rather than opening a full period page; record whether the independent `jr-snapshot-state` pane was manually opened or created by a host action. Check whether Logseq renders an empty grouping bullet and report that separately. Reload and confirm no duplication or refill. For older verified empty periods only, Setup's **Add two Persian examples per routine** remains the explicit action and must refuse edited pages. On `draft2`, separately check `:block-hidden-properties` and verify the native `Daily Journal` template applies Focus, Tasks, Notes and review only to **new** days; old days remain untouched.
+3. On another disposable graph, seed nested definitions (including property headers, fenced text, DONE tasks and links) **before** Enable. Confirm TODO clones, fresh UUIDs and correct hierarchy under the new summary block. Complete/edit/delete tasks, reload, then check no duplication or refill. Also test Gregorian alone without Persian Calendar, startup/rollover pane reuse, unrelated panes and manual closure; browsing an old journal must keep real-world current periods.
+4. Validate the native history queries: both sections render readable linked pages, newest first across calendars. Clicking opens original pages without creating snapshots. Check empty results, many periods and native query refresh cost; no plugin background scan is intended.
+5. Load the real Persian Calendar provider. Check API availability, Jalali months/Saturday weeks, calendar confirmation cancel/switch/back and provider disable/re-enable. Old pages/tasks must stay intact.
+6. Switch graphs rapidly, disable/unload during pending work, resume after sleep and test date/timezone changes. SDK calls already dispatched are not cancellable; document any actual host races rather than promising atomicity.
+7. Verify interrupted creation on disposable data only. Ambiguous outcomes must pause without deleting content or blindly recopying. Deliberately deleted period/history pages must stay deleted while their local creation markers remain.
+8. Measure live startup and large-history performance, fix observed host incompatibilities, rerun automated checks, then consider production packaging/documentation. Do not publish readiness claims before this gate.
+
+## Active incident — incorrect restored panes / closing failure (2026-09-28)
+
+The user reports the metadata pane persists after the summary-fallback fix and that closing Logseq may fail. Do not claim the previous patch resolved the Desktop incident.
+
+Read-only inspection confirmed Logseq Flatpak 0.10.15 is running and its external-plugin preferences point at this project. The active test graph's two period Markdown files retain the planned summary UUIDs and nested TODOs. No graph files, application preferences, caches or processes were modified.
+
+The host main log at 14:05:16 contains `Error: no ipc handler for` followed by a BrowserWindow dump. In official 0.10.15 `electron/handler.cljs`, the default IPC handler logs the window argument, not the unsupported request, so this does NOT identify the closing failure or implicate this plugin. Renderer console evidence is still needed.
+
+Source audit (not a live reproduction): `logseq/api.cljs` `open_in_right_sidebar` resolves UUID requests through `frontend/handler/editor.cljs` to numeric database IDs. `frontend/handler/ui.cljs` persists/restores sidebar tuples under `ls-right-sidebar-state` without UUID verification. Reindex rebuilds the DataScript database, so previously saved IDs can potentially resolve to different entities. Ordinary reload of the same serialized database is not evidence of ID reassignment. `frontend/state.cljs` also deduplicates added sidebar entries by numeric ID without graph identity; rendering itself is graph-filtered. Property names are native page links, another possible route to the separate `jr-snapshot-state` pane.
+
+Next evidence: clarify whether the entire window refuses to close or panes return after relaunch; capture main-renderer `localStorage.getItem("ls-right-sidebar-state")`, `window.logseq.api.get_state_from_store("sidebar/blocks")`, and console errors around one normal close attempt. Compare pane IDs with the exact expected summary UUIDs before/after the failure. Do not clear storage, reindex, kill Logseq, or auto-close unrelated panes to mask this incident.
+
+### Follow-up evidence: persistence failure, not merely presentation
+
+The user confirmed that the entire Logseq window refuses to close using ×. During graph reopening, Desktop shows `Internal status sync failed.` The main-renderer saved-sidebar key is `null`; live `sidebar/blocks` includes d5 IDs 36/39 as `block` and entries from several other graphs. This does not demonstrate localStorage restoration. The d5 monthly planned summary UUID on disk is `6aba6002-c44a-4d5c-afea-2ef48975b5f8`; weekly is `6aba6001-b115-4850-b746-d1f65b5d566c`.
+
+Official 0.10.15 source/bundle trace: the toast is `:graph/persist-error` (`resources/dicts/en.edn`, `frontend/ui.cljs`), displayed after `frontend/handler/repo.cljs` `persist-db!` fails during graph switching. That wrapper logs the original exception to the renderer console. Desktop `frontend/db/persist.cljs` dispatches `saveGraph` without awaiting its promise, then returns legacy IndexedDB cache deletion; the toast alone therefore does not prove a disk-write error. Serialization, callbacks or IndexedDB deletion can fail too.
+
+The close path in `electron/listener.cljs` sends `persistent-dbs-saved` on success and `persistent-dbs-error` on failure. `electron/electron/handler.cljs` handles only the success message in this release; `electron/electron/window.cljs` waits for the persistence-success channel before destroying the window. A persistence failure can therefore explain the unhandled-IPC log and stuck closing together. The original persistence exception remains unknown; do not attribute it to this plugin without that evidence.
+
+Next: get the original expanded renderer-console exception/stack with Preserve log enabled, and resolve d5 numeric pane IDs 36/39 versus the two planned UUIDs while d5 is active. Do not replace further plugin code or reset caches based solely on the toast.
+
+### d7 activation report
+
+The user reports a fresh d7 shows Enabled and `Deleted period ... is preserved as deleted`. Read-only inspection found only `pages/contents.md`; host log already mentions this exact d7 path at 13:01 (deleting its search index), before opening the current folder at 22:05. Thus the path is not previously unknown to the host, even if its folder is now empty. Plugin path-scoped creation markers survive folder reuse. The warning establishes a prior creation record plus an absent lookup, not proven deletion or successful prior creation.
+
+The runtime warning now describes an unavailable previously attempted period; setup shows `Enabled — attention required` when activation is saved but an error exists. Regression coverage verifies an emptied/reused path retains safety markers without recreating pages. No graph data or markers were reset. These changes improve accurate reporting; the underlying host persistence failure and sidebar incident remain unresolved pending the original renderer exception.
+
+### Root-cause evidence — unsupported Bean in graph serialization
+
+The user supplied the original renderer exception: `Error: Cannot write $cljs_bean$core$Bean$$`, from Transit `marshal`/`emitObjects`/`emitMap`. This identifies graph serialization, before disk persistence, as the failing operation. Do not continue diagnosing this as merely a sidebar/CSS issue.
+
+Official 0.10.15 source and installed bundle audit established a write path in this plugin that produces this value: `logseq.api.create_page` converts its JS properties argument with `bean/->clj`; `frontend/handler/page.cljs` `build-page-tx` assigns that Bean directly to page `:block/properties` and (in the ordinary header branch) to the pre-block. DataScript treats properties as a scalar value; outer transaction cleanup does not recursively materialize the Bean. The plugin's string-only property values and JSON-string plan do not prevent this container-type defect. Both `period-snapshot.js` and `routine-history.js` call this nonempty-properties creation API.
+
+Header `upsertBlockProperty` calls normalize the header map but save a partial block without `:db/id`; `outliner/core.cljs` page-property mirroring depends on that ID, so the page Bean can remain. This matches the previously observed stale page-property mirrors and explains why successful mocked checkpoint tests did not detect the persistence defect. The exact failing live entity has not been inspected; additional sources of Beans are not ruled out.
+
+Prevention IMPLEMENTED in `page-metadata.js`, used by period and history creation: create an acknowledged fresh page with null properties; verify any native title header or an exact newly inserted first-root bootstrap block; write complete metadata as text via `updateBlock`, which reparses into native persistent maps and mirrors page properties; verify pre-block, page ownership, identities and initial checkpoint before snapshot writes. Existing native title metadata is preserved. Durable attempt markers still precede writes; interrupted ambiguous bootstrap pauses, never adopts/rebuilds existing pages. Source audit corrected two fixture assumptions: an insert acknowledgement need not contain numeric `id`, and native title metadata need not be mirrored on the page until the full-block save. Do not replace this with `JSON.parse(JSON.stringify(properties))`, which still becomes a Bean at the same host boundary. The alternative root host fix is recursive JS-to-CLJS materialization in `create_page`.
+
+Existing in-memory Beans are not repaired by merely changing future creation or disabling the plugin. Recovery needs a separately authorized, verified, content-preserving procedure; an unchanged `updateBlock` may be skipped by the host. Do not clear caches, force quit, reindex, erase markers, or rewrite graph files behind Logseq. Both period/history creation paths are now covered. `scripts/validate_host_metadata.cjs` was executed against the audited installed bundle (SHA-256 `6e1363dd5a4f61cc23905c4df65268a132e1c02692651cb01f5d5a561a08dbf5`): real Bean-in-DataScript-Datom serialization reproduces the reported exception, and an equal native persistent map serializes successfully. The script runs extracted dependency sections in an isolated VM, uses only Node built-ins, rejects other hashes, and never accesses graph/profile state or launches Logseq. This is serializer-only evidence, NOT a full database/parser/updateBlock/Desktop persistence test. The user disabled the plugin; keep it disabled on affected graphs until safe recovery and real Desktop verification. No graph files, settings, markers or host processes were modified.
+
+## Known alpha limits
+
+No cross-device exactly-once guarantee or automatic repair/recreation. Graph path changes and erased plugin storage lose local activation/deletion evidence. Definition custom properties/scheduling metadata are not copied. References stay references to their original targets. History query rendering and host indexing latency remain unverified. Unsupported data/uncertain writes pause rather than risk overwriting edits.
