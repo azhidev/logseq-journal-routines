@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import test from "node:test";
 import { createActivationStorage, graphIdentity } from "./activation-storage.js";
-import { canonicalSetupJSON } from "./setup-plan.js";
+
 
 // Deliberately separate request success from transaction completion/abort. This
 // fixture checks event handling; the Chromium test below checks actual IndexedDB.
@@ -64,9 +64,9 @@ function fixture({ available = true, durability = "strict", autoOpen = true } = 
   } : null;
   return { indexedDB, db, transactions, opens, records, closes: () => closes };
 }
-const hash = (path) => createHash("sha256").update(canonicalSetupJSON(path)).digest("hex");
+const hash = (path) => createHash("sha256").update(JSON.stringify(path)).digest("hex");
 
-test("graph identity exactly matches setup's canonical string digest, not a raw-path/name hash", async () => {
+test("graph identity hashes the exact JSON-encoded path, not the display name", async () => {
   for (const path of ["/private/graph", " /private/graph ", "C:\\Private\\Graph", "/یادداشت/گراف", '/quotes/"graph"']) {
     const sdk = { App: { getCurrentGraph: async () => ({ path, name: "Display graph" }) } };
     const result = await graphIdentity(sdk);

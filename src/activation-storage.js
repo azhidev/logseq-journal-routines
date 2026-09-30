@@ -102,8 +102,8 @@ export function createActivationStorage({ indexedDB = globalThis.indexedDB } = {
 }
 
 /**
- * Matches setup-service digest(path): SHA-256 over UTF-8 canonicalSetupJSON(path),
- * i.e. JSON.stringify of the EXACT path (including JSON quotes/escapes). Do not
+ * SHA-256 over UTF-8 JSON.stringify of the EXACT graph path (including JSON
+ * quotes/escapes). This is local path identity, not an immutable graph ID. Do not
  * trim, normalize separators/case/Unicode, or hash the display name instead.
  * Raw path is transient and never returned, persisted or included in errors.
  * 0.10.15 api.cljs get_current_graph returns {path,name,url} for file graphs.
