@@ -1,300 +1,138 @@
 import assert from "node:assert/strict";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import test from "node:test";
-import { registerProbe } from "./register.js";
+import { registerRoutines } from "./register.js";
 
-// Static plain wire-response fixtures. No Calendar provider import, conversion,
-// live clock, or actual Logseq Desktop participates in these registration tests.
-const INFO_FIXTURE = {
-  id: "persian-calendar", version: 1,
-  capabilities: ["describe-date", "describe-today", "from-journal-day"],
-};
-const DATE_FIXTURE = {
-  gregorian: { year: 2025, month: 3, day: 21, iso: "2025-03-21", journalDay: 20250321 },
-  persian: { year: 1404, month: 1, day: 1, iso: "1404-01-01", label: "جمعه 1 فروردین 1404", weekOfYear: 1 },
-  week: { start: "2025-03-15", end: "2025-03-21", key: "weekly-20250315" },
-  month: { start: "2025-03-21", end: "2025-04-20", key: "monthly-1404-01", financeKey: "1404-01" },
-};
-const TARGET = "persian-calendar.models.";
-
-function setup(t) {
-  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
-  const reports = t.mock.method(console, "info", () => {});
-  const unexpected = [];
-  function readOnlySurface(methods) {
-    return new Proxy(methods, {
-      get(target, key) {
-        if (Object.hasOwn(target, key)) return target[key];
-        unexpected.push(String(key));
-        throw new Error(`Unexpected SDK access: ${String(key)}`);
-      },
-    });
+function fixture() {
+  const calls = [], commands = new Map(), hooks = new Set();
+  let handlers, unload, destroyed = 0, model, toolbar;
+  const state = { graphKey: "graph-a", graphName: "A", enabled: false, calendar: "gregorian", autoOpen: true,
+    definitions: { weekly: "Weekly", monthly: "Monthly" }, error: null };
+  const runtime = {
+    async start() { calls.push("start"); },
+    async destroy() { calls.push("destroy"); },
+    getStatus() { return { ...state }; },
+    async refreshStatus() { calls.push("status"); return { ...state }; },
+    async configure(options, key, confirmation) {
+      calls.push(["configure", options, key, confirmation]); Object.assign(state, options); return { ...state };
+    },
+    async enable(key) { calls.push(["enable", key]); state.enabled = true; return { ...state }; },
+    async disable(key) { calls.push(["disable", key]); state.enabled = false; return { ...state }; },
+    async showCurrent(key) { calls.push(key ? ["current", key] : "current"); },
+    async addExamples(key) { calls.push(["examples", key]); },
+    async showHistory() { calls.push("history"); },
+    async openDefinition(kind) { calls.push(["definition", kind]); },
+  };
+  const sdk = {
+    beforeunload(fn) { unload = fn; },
+    provideModel(value) { model = value; },
+    App: {
+      registerCommandPalette({ key }, fn) { commands.set(key, fn); },
+      registerUIItem(type, options) { assert.equal(type, "toolbar"); toolbar = options; },
+      onCurrentGraphChanged(fn) { hooks.add(fn); return () => hooks.delete(fn); },
+    },
+    UI: { async showMsg(message) { calls.push(["message", message]); } },
+    showMainUI() { calls.push("show"); }, hideMainUI() { calls.push("hide"); },
+    setMainUIInlineStyle() {},
+  };
+  const renders = [];
+  function mountView(document, callbacks) {
+    calls.push("mount"); handlers = callbacks;
+    return { render(value) { renders.push(value); }, focus() {}, destroy() { destroyed++; } };
   }
-  const state = { loaded: true, pendingToday: null };
-  const order = [];
-  const beforeunload = t.mock.fn(() => { order.push("unload"); });
-  const unsubscribe = t.mock.fn();
-  const onCurrentGraphChanged = t.mock.fn(() => {
-    order.push("graph");
-    return unsubscribe;
-  });
-  const registerCommandPalette = t.mock.fn(() => { order.push("command"); });
-  const showMsg = t.mock.fn(async () => {});
-  const invokeExternalPlugin = t.mock.fn(async (target, ...args) => {
-    order.push("invoke");
-    if (!state.loaded) throw new Error("provider not loaded");
-    switch (target) {
-      case `${TARGET}getApiInfo`:
-        assert.deepEqual(args, []);
-        return structuredClone(INFO_FIXTURE);
-      case `${TARGET}describeDate`:
-        assert.deepEqual(args, ["2025-03-21"]);
-        return structuredClone(DATE_FIXTURE);
-      case `${TARGET}describeToday`:
-        assert.deepEqual(args, []);
-        return state.pendingToday ?? structuredClone(DATE_FIXTURE);
-      case `${TARGET}fromJournalDay`:
-        assert.deepEqual(args, [20250321]);
-        return "2025-03-21";
-      default:
-        unexpected.push(target);
-        throw new Error(`Unexpected external model: ${target}`);
-    }
-  });
-  const sdk = readOnlySurface({
-    beforeunload,
-    App: readOnlySurface({ onCurrentGraphChanged, registerCommandPalette, invokeExternalPlugin }),
-    UI: readOnlySurface({ showMsg }),
-  });
-  const unload = () => beforeunload.mock.calls[0]?.arguments[0]();
-  t.after(() => {
-    unload();
-    assert.deepEqual(unexpected, [], "only the read-only SDK/model allowlist may be used");
-  });
-  return {
-    sdk, state, order, reports, beforeunload, unsubscribe, onCurrentGraphChanged,
-    registerCommandPalette, showMsg, invokeExternalPlugin, unload,
-    command: () => registerCommandPalette.mock.calls[0].arguments[1](),
+  return { calls, commands, runtime, state, hooks, renders, sdk,
+    get handlers() { return handlers; }, get destroyed() { return destroyed; },
+    get model() { return model; }, get toolbar() { return toolbar; },
+    unload: () => unload(),
+    async register() { return registerRoutines(sdk, { runtime, document: {}, mountView }); },
   };
 }
 
-test("one unload owner covers lazy journal inspection, setup and dependency runtime", async (t) => {
-  const h = setup(t);
-  const preview = { start: t.mock.fn(() => h.order.push("setup")), destroy: t.mock.fn() };
-  const journal = { start: t.mock.fn(() => h.order.push("journal")), destroy: t.mock.fn() };
-  const runtime = await registerProbe(h.sdk, { setup: preview, journal });
-  assert.deepEqual(h.order.slice(0, 6), ["unload", "setup", "journal", "command", "graph", "invoke"]);
-  assert.equal(h.beforeunload.mock.callCount(), 1);
-  await h.unload();
-  assert.equal(journal.destroy.mock.callCount(), 1);
-  assert.equal(preview.destroy.mock.callCount(), 1);
-  assert.equal(runtime.getStatus().state, "disposed");
+test("new entry registration starts only lightweight runtime and mounts setup lazily", async () => {
+  const f = fixture(), plugin = await f.register();
+  assert.deepEqual(f.calls, ["start"]);
+  assert.deepEqual([...f.commands.keys()], ["journal-routines-setup", "journal-routines-show", "journal-routines-history",
+    "journal-routines-definition-weekly", "journal-routines-definition-monthly", "journal-routines-disable"]);
+  assert.equal(f.toolbar.key, "journal-routines-open");
+  assert.match(f.toolbar.template, /data-on-click="openJournalRoutinesSetup"/);
+  assert.match(f.toolbar.template, /aria-label="Open Journal &amp; Routines"/);
+  assert.equal(typeof f.model.openJournalRoutinesSetup, "function");
+  await f.model.openJournalRoutinesSetup();
+  assert.deepEqual(f.calls.slice(1), ["status", "mount", "show"]);
+  assert.equal(f.renders.at(-1).graphKey, "graph-a");
+  await plugin.destroy();
+  assert.equal(f.destroyed, 1);
+  assert.equal(f.hooks.size, 0);
 });
 
-test("activation starts under the shared unload owner and is destroyed only once", async (t) => {
-  const h = setup(t);
-  const activation = { start: t.mock.fn(async () => h.order.push("activation")), destroy: t.mock.fn() };
-  await registerProbe(h.sdk, { activation });
-  assert.ok(h.order.indexOf("activation") < h.order.indexOf("invoke"));
-  await h.unload();
-  await h.unload();
-  assert.equal(activation.destroy.mock.callCount(), 1);
+test("Enable saves approved graph-scoped choices first; disabled Save never enables", async () => {
+  const f = fixture(); await f.register(); await f.commands.get("journal-routines-setup")();
+  const options = { calendar: "jalali", autoOpen: false }, approval = { confirmCalendarChange: true };
+  await f.handlers.onSave(options, "graph-a", approval);
+  assert.equal(f.state.enabled, false);
+  assert.deepEqual(f.calls.at(-1), ["configure", options, "graph-a", approval]);
+  await f.handlers.onEnable(options, "graph-a", approval);
+  assert.deepEqual(f.calls.slice(-2), [["configure", options, "graph-a", approval], ["enable", "graph-a"]]);
+  await f.handlers.onSave({ calendar: "gregorian" }, "graph-a", approval);
+  assert.deepEqual(f.calls.at(-1), ["enable", "graph-a"]);
+  await f.unload();
 });
 
-test("failed asynchronous activation startup cleans up and never starts the probe", async (t) => {
-  const h = setup(t);
-  const activation = { start: async () => { throw new Error("activation failed"); }, destroy: t.mock.fn() };
-  await assert.rejects(registerProbe(h.sdk, { activation }), /activation failed/);
-  assert.equal(activation.destroy.mock.callCount(), 1);
-  assert.equal(h.invokeExternalPlugin.mock.callCount(), 0);
-});
-
-test("journal registration failure cleans up all started components", async (t) => {
-  const h = setup(t);
-  const preview = { start: t.mock.fn(), destroy: t.mock.fn() };
-  const failure = new Error("journal command unavailable");
-  const journal = { start: () => { throw failure; }, destroy: t.mock.fn() };
-  await assert.rejects(registerProbe(h.sdk, { setup: preview, journal }), (error) => error === failure);
-  assert.equal(journal.destroy.mock.callCount(), 1);
-  assert.equal(preview.destroy.mock.callCount(), 1);
-  assert.equal(h.invokeExternalPlugin.mock.callCount(), 0);
-});
-
-test("registers SDK hooks and a read-only command, probes through the real client, and unloads", async (t) => {
-  const h = setup(t);
-  const runtime = await registerProbe(h.sdk);
-  assert.deepEqual(h.order.slice(0, 4), ["unload", "command", "graph", "invoke"]);
-  assert.equal(h.beforeunload.mock.callCount(), 1);
-  assert.equal(h.onCurrentGraphChanged.mock.callCount(), 1);
-  assert.equal(h.registerCommandPalette.mock.callCount(), 1);
-  assert.deepEqual(h.registerCommandPalette.mock.calls[0].arguments[0], {
-    key: "journal-routines-check-calendar",
-    label: "Journal & Routines: Check Calendar dependency (read-only)",
-  });
-  assert.deepEqual(h.invokeExternalPlugin.mock.calls.map(({ arguments: args }) => args), [
-    [`${TARGET}getApiInfo`],
-    [`${TARGET}getApiInfo`],
-    [`${TARGET}describeDate`, "2025-03-21"],
-    [`${TARGET}getApiInfo`],
-    [`${TARGET}describeToday`],
-    [`${TARGET}getApiInfo`],
-    [`${TARGET}fromJournalDay`, 20250321],
-    [`${TARGET}getApiInfo`],
-  ]);
-  assert.equal(runtime.getStatus().state, "available");
-  assert.equal(h.showMsg.mock.callCount(), 0, "startup does not show manual-command feedback");
-  h.unload();
-  h.unload();
-  assert.equal(h.unsubscribe.mock.callCount(), 1);
-  assert.deepEqual(runtime.getStatus(), { state: "disposed", checkedAt: null });
-  t.mock.timers.tick(60_000);
-  await h.command();
-  assert.equal(h.invokeExternalPlugin.mock.callCount(), 8);
-  assert.equal(h.showMsg.mock.callCount(), 0);
-});
-
-test("manual command reports unavailable/available through provider load order and reload", async (t) => {
-  const h = setup(t);
-  h.state.loaded = false;
-  const runtime = await registerProbe(h.sdk);
-  assert.equal(runtime.getStatus().state, "unavailable");
-  assert.equal(h.showMsg.mock.callCount(), 0);
-
-  for (const loaded of [false, true, false, true]) {
-    h.state.loaded = loaded;
-    const previousCalls = h.invokeExternalPlugin.mock.callCount();
-    const previousReports = h.reports.mock.callCount();
-    await h.command();
-    assert.ok(h.invokeExternalPlugin.mock.callCount() > previousCalls, "recheck must not cache availability");
-    assert.equal(h.reports.mock.callCount(), previousReports + 1, "manual rechecks always report");
-    assert.equal(runtime.getStatus().state, loaded ? "available" : "unavailable");
-    const [message, type] = h.showMsg.mock.calls.at(-1).arguments;
-    assert.equal(type, loaded ? "success" : "warning");
-    if (loaded) {
-      assert.match(message, /2025-03-21 \/ 1404-01-01/);
-      assert.match(message, /This diagnostic is read-only\. Journal activation is managed separately/);
-    } else {
-      assert.match(message, /Calendar dependency unavailable: .*provider not loaded/);
-      assert.match(message, /This diagnostic did not change graph content/);
-      assert.equal(runtime.getStatus().sample, undefined);
-    }
-  }
-  assert.equal(h.showMsg.mock.callCount(), 4);
-});
-
-test("unload cancels a pending manual probe and suppresses late transport results and feedback", async (t) => {
-  const h = setup(t);
-  const runtime = await registerProbe(h.sdk);
+test("Disable invalidates an in-flight setup chain before it can re-enable", async () => {
+  const f = fixture(); await f.register(); await f.commands.get("journal-routines-setup")();
   let resolve;
-  h.state.pendingToday = new Promise((yes) => { resolve = yes; });
-  const pending = h.command();
-  assert.deepEqual(runtime.getStatus(), { state: "checking", checkedAt: null });
-  await nextTurn();
-  assert.deepEqual(h.invokeExternalPlugin.mock.calls.at(-1).arguments, [`${TARGET}describeToday`]);
-  h.unload();
+  f.runtime.configure = () => new Promise((done) => { resolve = done; });
+  const pending = f.handlers.onEnable({}, "graph-a", {});
+  await f.handlers.onDisable("graph-a");
+  resolve({ ...f.state });
+  await assert.rejects(pending, /cancelled/);
+  assert.equal(f.calls.some((call) => Array.isArray(call) && call[0] === "enable"), false);
+  await f.unload();
+});
+
+test("graph change closes setup and prevents late open from remounting stale controls", async () => {
+  const f = fixture(), plugin = await f.register();
+  let resolve;
+  f.runtime.refreshStatus = () => new Promise((done) => { resolve = done; });
+  const pending = plugin.open();
+  for (const hook of f.hooks) hook();
+  resolve({ ...f.state });
   await pending;
-  const calls = h.invokeExternalPlugin.mock.callCount();
-  resolve(structuredClone(DATE_FIXTURE));
-  await nextTurn();
-  t.mock.timers.tick(60_000);
-  await nextTurn();
-  assert.deepEqual(runtime.getStatus(), { state: "disposed", checkedAt: null });
-  assert.equal(h.showMsg.mock.callCount(), 0);
-  assert.equal(h.reports.mock.callCount(), 1, "only the completed startup probe is reported");
-  assert.equal(h.invokeExternalPlugin.mock.callCount(), calls);
-  assert.equal(h.unsubscribe.mock.callCount(), 1);
+  assert.equal(f.calls.includes("mount"), false);
+  await f.unload();
 });
 
-test("registration errors propagate and leave the unload hook safe to call", async (t) => {
-  const h = setup(t);
-  const failure = new Error("command registration failed");
-  h.registerCommandPalette.mock.mockImplementation(() => { throw failure; });
-  await assert.rejects(registerProbe(h.sdk), (error) => error === failure);
-  assert.equal(h.beforeunload.mock.callCount(), 1);
-  h.unload();
-  t.mock.timers.tick(60_000);
-  assert.equal(h.onCurrentGraphChanged.mock.callCount(), 0);
-  assert.equal(h.invokeExternalPlugin.mock.callCount(), 0);
-  assert.equal(h.showMsg.mock.callCount(), 0);
+test("explicit example action stays graph-scoped and then opens current native panes", async () => {
+  const f = fixture(); await f.register(); await f.commands.get("journal-routines-setup")();
+  await f.handlers.onAddExamples("graph-a");
+  assert.deepEqual(f.calls.slice(-3), [["examples", "graph-a"], ["current", "graph-a"], "hide"]);
+  await f.unload();
 });
 
-test("one unload hook owns both setup and probe, installed before either starts", async (t) => {
-  const h = setup(t);
-  const preview = {
-    start: t.mock.fn(() => { h.order.push("setup"); }),
-    destroy: t.mock.fn(),
-  };
-  const runtime = await registerProbe(h.sdk, { setup: preview });
-  assert.deepEqual(h.order.slice(0, 5), ["unload", "setup", "command", "graph", "invoke"]);
-  assert.equal(h.beforeunload.mock.callCount(), 1);
-  assert.equal(preview.start.mock.callCount(), 1);
-  assert.equal(runtime.getStatus().state, "available");
-  await h.unload();
-  assert.equal(preview.destroy.mock.callCount(), 1);
-  assert.equal(h.unsubscribe.mock.callCount(), 1);
-  assert.equal(runtime.getStatus().state, "disposed");
-  const calls = h.invokeExternalPlugin.mock.callCount();
-  t.mock.timers.tick(60_000);
-  await h.command();
-  assert.equal(h.invokeExternalPlugin.mock.callCount(), calls);
-  assert.equal(h.showMsg.mock.callCount(), 0);
+test("navigation closes UI only on success; errors remain visible", async () => {
+  const f = fixture(); await f.register(); await f.commands.get("journal-routines-setup")();
+  await f.handlers.onShowHistory();
+  assert.deepEqual(f.calls.slice(-2), ["history", "hide"]);
+  await f.commands.get("journal-routines-setup")();
+  f.runtime.configure = async () => { throw new Error("Invalid settings"); };
+  await assert.rejects(f.handlers.onSave({}, "graph-a", {}), /Invalid settings/);
+  assert.equal(f.renders.at(-1).error, "Invalid settings");
+  await f.unload();
 });
 
-test("setup start errors propagate after cleanup with an already installed unload hook", async (t) => {
-  const h = setup(t);
-  const failure = new Error("setup mount failed");
-  const preview = {
-    start: t.mock.fn(() => {
-      assert.equal(h.beforeunload.mock.callCount(), 1);
-      throw failure;
-    }),
-    destroy: t.mock.fn(),
-  };
-  await assert.rejects(registerProbe(h.sdk, { setup: preview }), (error) => error === failure);
-  assert.equal(preview.destroy.mock.callCount(), 1);
-  assert.equal(h.registerCommandPalette.mock.callCount(), 0);
-  assert.equal(h.onCurrentGraphChanged.mock.callCount(), 0);
-  await h.unload();
-  t.mock.timers.tick(60_000);
-  assert.equal(h.invokeExternalPlugin.mock.callCount(), 0);
+test("unload is idempotent and commands are inert afterwards", async () => {
+  const f = fixture(), plugin = await f.register();
+  await f.unload(); await plugin.destroy();
+  assert.equal(f.calls.filter((call) => call === "destroy").length, 1);
+  const length = f.calls.length;
+  await f.commands.get("journal-routines-show")();
+  await f.model.openJournalRoutinesSetup();
+  assert.equal(f.calls.length, length);
 });
 
-test("probe start errors also destroy the already started setup", async (t) => {
-  const h = setup(t);
-  const failure = new Error("graph subscription failed");
-  h.onCurrentGraphChanged.mock.mockImplementation(() => { throw failure; });
-  const preview = { start: t.mock.fn(), destroy: t.mock.fn() };
-  await assert.rejects(registerProbe(h.sdk, { setup: preview }), (error) => error === failure);
-  assert.equal(preview.start.mock.callCount(), 1);
-  assert.equal(preview.destroy.mock.callCount(), 1);
-  assert.equal(h.beforeunload.mock.callCount(), 1);
-  assert.equal(h.registerCommandPalette.mock.callCount(), 1);
-  await h.unload();
-  await h.command();
-  t.mock.timers.tick(60_000);
-  assert.equal(h.invokeExternalPlugin.mock.callCount(), 0);
-  assert.equal(h.showMsg.mock.callCount(), 0);
-});
-
-test("setup destroy errors cannot prevent probe disposal in the combined unload hook", async (t) => {
-  const h = setup(t);
-  const failure = new Error("setup teardown failed");
-  let fail = true;
-  const preview = {
-    start: t.mock.fn(),
-    destroy: t.mock.fn(() => { if (fail) throw failure; }),
-  };
-  const runtime = await registerProbe(h.sdk, { setup: preview });
-  try {
-    await assert.rejects(h.unload(), (error) => error === failure);
-    assert.equal(runtime.getStatus().state, "disposed");
-    assert.equal(h.unsubscribe.mock.callCount(), 1);
-    const calls = h.invokeExternalPlugin.mock.callCount();
-    t.mock.timers.tick(60_000);
-    await h.command();
-    assert.equal(h.invokeExternalPlugin.mock.callCount(), calls);
-    assert.equal(h.showMsg.mock.callCount(), 0);
-  } finally {
-    fail = false;
-  }
+test("startup failure tears down registered graph hook and runtime", async () => {
+  const f = fixture();
+  f.runtime.start = async () => { throw new Error("startup failure"); };
+  await assert.rejects(f.register(), /startup failure/);
+  assert.equal(f.hooks.size, 0);
+  assert.deepEqual(f.calls, ["destroy"]);
 });

@@ -1,15 +1,15 @@
 {
   "name": "logseq-journal-routines",
-  "version": "0.4.7",
+  "version": "0.5.0-alpha.1",
   "private": true,
-  "description": "Per-graph setup and automatic journal routines with Persian Calendar; experimental Desktop writer.",
+  "description": "Lightweight weekly/monthly routine pages in Logseq's sidebar; Gregorian standalone, optional Jalali.",
   "type": "module",
   "main": "index.html",
+  "icon": "./icon.png",
   "scripts": {
     "build": "esbuild src/index.js --bundle --format=iife --platform=browser --outfile=dist/index.js",
     "test": "node --test src/*.test.js",
-    "test:browser": "node scripts/validate_activation.cjs",
-    "test:browser:preview": "node scripts/validate_setup.cjs"
+    "test:browser": "node scripts/validate_routines.cjs"
   },
   "dependencies": {
     "@logseq/libs": "0.0.17"

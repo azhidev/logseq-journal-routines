@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Journal and Routines calendar">
+  <rect width="256" height="256" rx="56" fill="#263554"/>
+  <rect x="40" y="52" width="176" height="156" rx="22" fill="#f7f6f2"/>
+  <path d="M40 74a22 22 0 0 1 22-22h132a22 22 0 0 1 22 22v20H40z" fill="#56c6b6"/>
+  <path d="M82 38v32m92-32v32" fill="none" stroke="#f7f6f2" stroke-width="14" stroke-linecap="round"/>
+  <path d="m70 136 12 12 20-24m-32 53 12 12 20-24" fill="none" stroke="#348f81" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M123 139h62m-62 41h45" fill="none" stroke="#536486" stroke-width="11" stroke-linecap="round"/>
+</svg>
