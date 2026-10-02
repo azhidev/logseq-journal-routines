@@ -1,6 +1,6 @@
 # Next session — Desktop validation and release hardening
 
-Updated: 2026-09-27
+Updated: 2026-10-02
 Status: **Lightweight runtime implemented; development alpha, not production-ready.**
 
 ## Start here
@@ -19,6 +19,9 @@ Read `AGENTS.md`, `SCOPE.md` and `README.md`. Product decisions remain settled. 
 | `src/period-model.js` | Local civil date, Gregorian periods, calendar-qualified identities and ownership |
 | `src/period-snapshot.js` | Header-aware copying, durable native summary root, interrupted creation verification and preservation |
 | `src/routine-history.js` | On-demand native history page and queries |
+| `src/daily-template.js` | Explicit native daily-template installer, original-task queries, verified graph-owned calendar/definition context and exact generated-presentation refresh |
+| `src/daily-today.js` | Explicit native `:today` resolution, empty/one-blank-block preflight, durable application intent and native insertion verification |
+| `src/daily-presentation.js` | Native marked-query styling: hide confirmed empty priority/pending, flatten query wrapper only |
 | `src/activation-storage.js` | Reused IndexedDB metadata storage and exact-path graph identity |
 | `src/calendar-client.js` | Reused validated Persian Calendar API transport |
 | `scripts/validate_routines.cjs` | Chromium assembled-plugin fixture, not a live Logseq host |
@@ -39,18 +42,50 @@ Initial mocks incorrectly assumed empty trees after page creation with propertie
 ## Actual validation completed
 
 ```sh
-npm test                 # 490 passed after text-metadata creation fix
-npm run test:browser     # 18 Chromium fixture checks passed after that fix
-npm run build            # passed after that fix
+npm test                 # 634 passed after streamlined Setup and guarded combined action
+npm run test:browser     # 22 Chromium fixture checks passed, including combined/routine-only Setup
+npm run build            # passed, dist/index.js about 322 KiB unminified
 ```
 
-Current bundle is approximately 274 KB, including SDK, unminified (gzip size not remeasured after caption changes). Chromium executable in this workspace: `/usr/bin/google-chrome` (rediscover if the environment changes).
+Current bundle is approximately 322 KiB, including SDK, unminified (gzip size not remeasured). Chromium executable in this workspace: `/usr/bin/google-chrome` (rediscover if the environment changes).
 
 Automated coverage includes Gregorian/Nowruz boundary fixtures, nested task copies, stale page-property mirrors, metadata collisions, interrupted writes, user edits/deletions, graph changes during writes, calendar switching/back, dependency absence, native history generation, duplicate triggers, rollover, idle call counts and listener cleanup. Real Chromium IndexedDB persistence is exercised separately from fake task/graph APIs.
 
+## Daily-template extension — 2026-10-01
+
+User approved the optional native daily template: Focus, Tasks, unfinished priority A excluding WAITING, Pending = WAITING, and real-current-week routine/manual tasks. Installed through Setup's **Install daily journal template**, separate from Enable, after explicit approval if another default exists. No live graph was installed/changed by the coding agent.
+
+- Native `App.getCurrentGraphConfigs/setCurrentGraphConfigs("default-templates")` preserve sibling entries; the setter's returned acknowledgement does not await the host disk-write promise. Verify after reload.
+- Ordinary template page/root with `template-including-parent:: false`; blank Focus/Tasks child blocks and native original-block queries. No automatic plugin journal creation/insertion, copying, daily-ref insertion or history traversal. The explicit empty-today exception added on 2026-10-02 is described below. Native insertion applies to eligible empty today/future journals, not strictly only never-created pages; populated journals are untouched.
+- This week uses verified weekly period metadata and native scheduled/deadline dates, including manual tasks on the weekly page. No weekly page means no weekly results. Context stores calendar plus parser-stable prefixed definition page UUIDs; it follows settings across calendars without rewriting journal query blocks. One verified root text save updates context fields together, preserving other root text and descendants. Failed optional synchronization warns in Setup but does not reject core settings; startup/day/Show current retry. Incomplete/deleted installation is never refilled.
+- Disable/unload leaves the native default/template intact, while stopping new routine creation. Users can independently change/remove the native default.
+- `scripts/validate_daily_queries.cjs <pinned-host-main.js>` passed **26 isolated native DataScript fixtures** using real UUID datoms/query/rule evaluation: Saturday/Monday and month/year/Nowruz bounds, switch/back, WAITING/DONE/priority-A filters, definition exclusions including boolean/numeric names, and duplicate match elimination. The hash-pinned script never launches the app or accesses graph/profile data. Not native Markdown parsing, clock resolution, renderer, config persistence or Desktop insertion evidence.
+
+Desktop gate: on a fresh disposable graph, install with no default; verify five sections on the next eligible empty journal, editable original query tasks and breadcrumbs. Test existing-default refusal/explicit replacement while preserving its content and sibling config. Verify manual weekly-page tasks, scheduled/deadline inclusive boundaries, completed-task removal, selected definition exclusion, calendar switch/back, populated journals unchanged, edited template sections preserved, repeat installation, disabling, and config persistence across reload. Check open-query midnight/resume refresh and large-graph native query cost. Do not erase earlier test graphs, markers or journal data to simulate freshness.
+
+## Daily-template Desktop follow-up — 2026-10-02
+
+User screenshot confirms template sections and two native weekly results on Oct 2, while Oct 1 was expected. This does not establish a date-offset bug: installation only selects a default, and native Logseq applies it on mounted eligible today/future pages. Source audit confirms the automatic path's strict `page-empty?` skips a journal with even one existing blank block. The actual Oct 1 graph state was not inspected.
+
+Implemented a separate **Apply daily template to today** action: graph-pinned native `:today` query, verified existing Markdown journal, no formatted page names or journal-page creation; only empty/one-blank-root targets without user properties/children, no current editing, durable attempt before writes, native `App.insertTemplate`, fresh-UUID/tree/content verification. Native getTemplate registration can lack children: source is separately loaded with getBlock(includeChildren:true). Blank insert acknowledgements can be UUID-only: actual identity comes from read-back. Uncertain application never blindly retries or erases data.
+
+Template headings now have suitable icons. Native queries use title markers and disable grouping/breadcrumbs/table rendering. Scoped CSS hides confirmed empty Priority A/Pending only when their query is the sole child; errors/unrendered queries/extra notes remain visible. It flattens query wrappers without hiding task bullets or real task nesting. Explicit reinstall refreshes only exact recognized generated template heading/query text, preserving custom sections. Existing populated journal query blocks are not retrofitted.
+
+Validation: 626 Node tests, 20 assembled Chromium smoke checks, 26 pinned native DataScript fixtures, build about 316 KiB. The new Chromium native-shaped DOM fixture passes empty/result/error/extra-note/indent/task-bullet assertions. These are not Desktop rendering/application evidence. No live graph writes were made by the coding agent.
+
+Next Desktop test: reload plugin, explicitly reinstall to refresh untouched source presentation, finish editing, open today's journal through native navigation if missing, and click Apply daily template to today. Verify today—not viewed tomorrow—receives sections once, and populated today refuses unchanged. Check empty priority/pending hiding/return on results, errors visible, icons, weekly indentation and editability. Tomorrow's existing content remains untouched; do not clear markers or rewrite journals to force a re-test.
+
+## Streamlined Setup follow-up — 2026-10-02
+
+User reports the preceding daily-today/layout changes work, then requested improved installation/setup UI and fewer actions. The primary **Set up this graph** explicitly saves approved choices, enables routines, installs the selected daily template and attempts guarded today application. Daily inclusion is visibly selected/recommended but can be unchecked; replacing another native default still requires approval. Detailed guidance, definition fields and manual tools are collapsed under More options. Current graph/status pills, section preview, busy primary action and live completion/partial-completion feedback replace the previously crowded first view.
+
+Combined setup stops on graph changes/Disable/unload/errors, without pretending the SDK sequence is atomic. Only coded preflight today refusals can become an unchanged-today result; post-intent application errors remain failures. A recorded earlier attempt is never retried/rebuilt. Missing today gets a native-navigation instruction. Individual manual actions remain strict and accessible.
+
+Validation after this UI/workflow change: 634 Node tests, 22 Chromium smoke scenarios, 26 pinned native DataScript fixtures, clean diagnostics and build about 322 KiB. Browser fixtures cover combined setup with a missing native today page and daily opt-out; registration tests cover sequencing, opt-in, replacement refusal, partial errors and interruption. No live graph/config changes by the coding agent. The streamlined screen and combined workflow require a new Desktop check; user confirmation of the earlier layout is not validation of this newer workflow.
+
 ## Remaining release gate — actual Logseq Desktop
 
-User screenshots of disposable graphs confirmed the manifest icon/toolbar, enabled Jalali page creation, and (in `draft4`) native compact summary-block panes ordered weekly above monthly, with period labels **inside** those panes and technical page names as native headers. Later screenshots show the localized page-title/starter-task build and editable compact panes in Desktop, but also exposed mixed-direction ordering in the Jalali captions. The RTL caption/separately isolated Gregorian date fix is built and fixture-tested, not yet verified in Desktop. A later screenshot of the next day shows a metadata-bearing full monthly page pane and a separate `jr-snapshot-state` pane. The runtime's fallback from an unverified planned summary to the full page has now been removed, but this fix and the cause of the separate pane still require live Desktop verification. Never auto-close unrelated sidebar panes or delete graph metadata. Manual example insertion and the `draft2` daily template also remain unverified in Desktop. Logseq is running as a Flatpak, but no `logseq` command was found on PATH here. Do not edit its open period Markdown files behind the host or use personal notes for failure injection.
+User screenshots of disposable graphs confirmed the manifest icon/toolbar, enabled Jalali page creation, and (in `draft4`) native compact summary-block panes ordered weekly above monthly, with period labels **inside** those panes and technical page names as native headers. Later screenshots show the localized page-title/starter-task build and editable compact panes in Desktop, but also exposed mixed-direction ordering in the Jalali captions. The latest user screenshot still exposed mixed-direction ordering with the single-line caption. Captions now place the label above a smaller, subdued range, with independently RTL weekly and LTR monthly date ranges. `npm test`, `npm run build` and 18 browser fixture checks passed after this presentation-only change; actual Desktop rendering remains to be checked. A later screenshot of the next day shows a metadata-bearing full monthly page pane and a separate `jr-snapshot-state` pane. The runtime's fallback from an unverified planned summary to the full page has now been removed, but this fix and the cause of the separate pane still require live Desktop verification. Never auto-close unrelated sidebar panes or delete graph metadata. Manual example insertion and the `draft2` daily template also remain unverified in Desktop. Logseq is running as a Flatpak, but no `logseq` command was found on PATH here. Do not edit its open period Markdown files behind the host or use personal notes for failure injection.
 
 1. Reload the rebuilt plugin from its project root on a **fresh disposable** Markdown graph. Choose Jalali, then Enable with both default definition pages absent. The SDK should create two editable Persian TODOs in each definition and each current period, with a nonprinting grouping anchor rather than a visible `Tasks` heading. Do not reset/delete old periods or storage to simulate a fresh graph. Existing/selected definition pages remain untouched, and older named period pages stay under their original names.
 2. Verify weekly above monthly and localized **native pane headers** beginning `هفتهٔ ۲۸ · ۱۴۰۵` / `مهر ۱۴۰۵`, with the civil start as a unique suffix. The pane should show the two Persian TODOs without a `Tasks` heading, repeated period label or prominent `jr-*` properties. Test on the following day/reload as well: an unverified summary must pause with a warning rather than opening a full period page; record whether the independent `jr-snapshot-state` pane was manually opened or created by a host action. Check whether Logseq renders an empty grouping bullet and report that separately. Reload and confirm no duplication or refill. For older verified empty periods only, Setup's **Add two Persian examples per routine** remains the explicit action and must refuse edited pages. On `draft2`, separately check `:block-hidden-properties` and verify the native `Daily Journal` template applies Focus, Tasks, Notes and review only to **new** days; old days remain untouched.
