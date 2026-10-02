@@ -2,7 +2,8 @@
 "use strict";
 
 // Browser/SDK fixture only: this does not validate actual Logseq sidebar panes,
-// query evaluation/rendering, Calendar transport, or IndexedDB durability.
+// query evaluation/rendering, native template application/config persistence,
+// Calendar transport, or IndexedDB durability.
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const { mkdtempSync, writeFileSync, rmSync, existsSync } = require("node:fs");
@@ -43,6 +44,7 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
   };
   async function click(label, { closes = false, error = false } = {}) {
     const node = button(label);
+    if (node.closest(".jr-routines-advanced")?.hidden) button("More options").click();
     check(!node.disabled && !node.closest("[hidden]"), `Button unavailable: ${label}`);
     node.click();
     await until(() => closes ? !document.querySelector(".jr-routines") :
@@ -66,10 +68,14 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
   const graph = { path: "/fixture-only/journal-routines", name: `Smoke ${payload}` };
   const definitions = { weekly: `Weekly ${payload}`, monthly: "Monthly smoke routines" };
   const historyName = "Journal & Routines — History";
+  const dailyTemplateName = "Journal & Routines — Daily";
+  const dailyTemplatePage = "Journal & Routines — Daily template";
+  const graphConfigs = { "default-templates": { journals: "Existing daily template", pages: "Existing page template", extra: "preserve me" },
+    "preferred-format": "markdown" };
   const uuid = () => `00000000-0000-4000-8000-${String(++nextUUID).padStart(12, "0")}`;
   const log = (name, ...args) => calls.push([name, ...clone(args)]);
   const named = (name) => calls.filter((call) => call[0] === name);
-  const writes = () => calls.filter((call) => ["createPage", "insertBlock", "updateBlock", "property"].includes(call[0]));
+  const writes = () => calls.filter((call) => ["createPage", "insertBlock", "updateBlock", "property", "setGraphConfigs"].includes(call[0]));
   const pageBy = (key) => typeof key === "string" ? pages.get(key.toLowerCase()) || entities.get(key) : entities.get(key);
   function pageEntity(page) {
     if (!page) return null;
@@ -93,6 +99,16 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
   }
   function propertyContent(properties) {
     return Object.entries(properties).map(([key, value]) => `${key}:: ${value}`).join("\n");
+  }
+  function nativeProperties(content) {
+    const properties = {};
+    for (const line of content.split("\n")) {
+      const match = /^([a-z][a-z0-9-]*):: (.+)$/.exec(line);
+      if (!match) continue;
+      check(!Object.hasOwn(properties, match[1]), "Duplicate native property");
+      properties[match[1]] = match[1] === "template-including-parent" && match[2] === "false" ? false : match[2];
+    }
+    return properties;
   }
   const headerOf = (page) => page.blocks.find((block) => block.preBlock === true);
   const contentBlocks = (page) => page.blocks.filter((block) => block.preBlock !== true);
@@ -132,6 +148,17 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
   const monthlySource = addPage(definitions.monthly);
   addBlock(monthlySource, monthlySource, "CANCELED Monthly review\ncompleted-at:: yesterday");
   const sourceBefore = JSON.stringify([weeklySource, monthlySource, external]);
+  const existingTemplate = addPage("Existing daily template");
+  const existingRoot = addBlock(existingTemplate, existingTemplate, "Existing daily content\ntemplate:: Existing daily template");
+  existingRoot.properties = nativeProperties(existingRoot.content);
+  addBlock(existingTemplate, existingRoot, "Keep my original template section");
+  const populatedJournal = addPage("Mar 21st, 2026");
+  populatedJournal["journal?"] = true;
+  addBlock(populatedJournal, populatedJournal, "TODO Preserve today's populated journal");
+  const emptyJournal = addPage("Mar 22nd, 2026");
+  emptyJournal["journal?"] = true;
+  const journalsBefore = JSON.stringify([populatedJournal, emptyJournal]);
+  const existingTemplateBefore = JSON.stringify(existingTemplate);
 
   const storage = {
     async get(key) { check(!storageClosed, "Read after storage.close"); log("storage.get", key); return clone(records.get(key) ?? null); },
@@ -141,6 +168,25 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
   const sdk = {
     App: strictAPI("App", {
       async getCurrentGraph() { log("graph"); return clone(graph); },
+      async getUserConfigs() { log("userConfigs"); return { enabledJournals: true, preferredFormat: "markdown" }; },
+      async getCurrentGraphConfigs(key) {
+        equal(key, "default-templates", "Only the native default-template map is read");
+        log("getGraphConfigs", key); return clone(graphConfigs[key]);
+      },
+      async setCurrentGraphConfigs(config) {
+        equal(Object.keys(config), ["default-templates"], "Only default templates may be configured");
+        equal(config["default-templates"], { ...graphConfigs["default-templates"], journals: dailyTemplateName },
+          "Journal default replacement preserves all sibling defaults");
+        log("setGraphConfigs", config); Object.assign(graphConfigs, clone(config));
+      },
+      async getTemplate(name) {
+        equal(name, dailyTemplateName, "Exact native template lookup");
+        log("getTemplate", name);
+        const roots = [...entities.values()].filter((entity, index, all) =>
+          all.indexOf(entity) === index && !entity.blocks && entity.properties.template === name);
+        check(roots.length <= 1, "Native template name must be unique");
+        return roots.length ? blockEntity(roots[0], true) : null;
+      },
       onCurrentGraphChanged(fn) { graphListeners.add(fn); return () => graphListeners.delete(fn); },
       registerCommandPalette(options, action) {
         check(!commands.has(options.key), "Duplicate command"); commands.set(options.key, action); log("command", options);
@@ -203,7 +249,7 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
         const block = addBlock(page, parent, content, options.customUUID, index);
         // Model Desktop appending the fresh custom UUID property, not source properties.
         block.content += `\nid:: ${block.uuid}`;
-        block.properties.id = block.uuid;
+        block.properties = /^template:: /m.test(content) ? nativeProperties(block.content) : { id: block.uuid };
         return blockEntity(block, false);
       },
       async checkEditing() { log("checkEditing"); return false; },
@@ -212,6 +258,22 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
         const block = entities.get(id);
         check(block && !block.blocks, "Metadata target must be a block");
         const page = entities.get(block.page.id);
+        if (block.properties.template === dailyTemplateName) {
+          check(page.originalName === dailyTemplatePage && page.properties["jr-daily-template-version"] === "v1" &&
+            headerOf(page)?.properties["jr-daily-template-state"] === "ready", "Context save requires a ready owned template");
+          check(contentBlocks(page)[0] === block && block.parent.id === page.id && block.left.id === headerOf(page).id &&
+            !block.preBlock, "Context save targets only the native template root");
+          const contextKeys = ["jr-daily-calendar", "jr-weekly-definition", "jr-monthly-definition"];
+          const withoutContext = (text) => text.split("\n").filter((line) =>
+            !contextKeys.some((key) => line.startsWith(`${key}:: `))).join("\n");
+          equal(withoutContext(content), withoutContext(block.content), "Root save preserves all non-context text/properties");
+          const properties = nativeProperties(content);
+          for (const key of contextKeys) check(typeof properties[key] === "string", "Context property retained");
+          check(["gregorian", "jalali"].includes(properties["jr-daily-calendar"]), "Supported root calendar");
+          block.content = content;
+          block.properties = properties;
+          return;
+        }
         check(page.blocks[0] === block && block.parent.id === page.id && block.left.id === page.id,
           "Metadata must target the first page root");
         equal(block.children, [], "Metadata has no children");
@@ -231,7 +293,7 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
         log("property", id, key, value);
         const header = entities.get(id);
         check(header?.preBlock === true && !header.blocks, "Checkpoint must target the header block UUID, not the page UUID");
-        check(["jr-snapshot-state", "jr-history-state"].includes(key), "Unexpected property write");
+        check(["jr-snapshot-state", "jr-history-state", "jr-daily-template-state"].includes(key), "Unexpected property write");
         header.properties[key] = clone(value);
         header.content = propertyContent(header.properties);
         // Model direct SDK transactions: mutable page.properties remains stale.
@@ -243,7 +305,14 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
         log("sidebar", id); sidebar.add(id);
       },
     }),
-    DB: strictAPI("DB", {}),
+    DB: strictAPI("DB", {
+      async datascriptQuery(query, ...inputs) {
+        check(query.includes("[?p :block/journal-day ?today]") && query.includes("[?p :block/journal? true]"), "Only native today lookup is allowed");
+        equal(inputs, [":today"], "Native civil today input, never a formatted journal title");
+        log("todayQuery", query, inputs);
+        return []; // This fixture has no dated native today page; combined setup must preserve that.
+      },
+    }),
     UI: strictAPI("UI", { async showMsg(...args) { log("message", ...args); } }),
     beforeunload(fn) { check(!unload, "One unload handler"); unload = fn; },
     provideModel(value) { model = value; },
@@ -468,11 +537,76 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
       equal(period("jalali", "monthly").properties["jr-end"], "2026-04-20", "Provider month bounds");
       check(named("calendar").some((call) => call[1] === "persian-calendar.models.describeDate"), "Real Calendar client used fake transport");
     });
+    await test("daily template UI refuses silent replacement then installs native sections with explicit approval", async () => {
+      const before = JSON.stringify([...pages.values()]), count = writes().length, oldPeriods = JSON.stringify(periods());
+      check(!field("replaceExisting").checked, "Replacement approval starts unchecked");
+      await click("Install daily journal template", { error: true });
+      check(document.querySelector('[role=alert]').textContent.includes("Explicitly approve replacement"), "Existing default requires approval");
+      equal(writes().length, count, "Refusal has no graph or config writes");
+      equal(JSON.stringify([...pages.values()]), before, "Refusal preserves all pages");
+      equal(graphConfigs["default-templates"].journals, "Existing daily template", "Refusal preserves current default");
+      field("replaceExisting").click();
+      const hidden = named("hideUI").length;
+      await click("Install daily journal template");
+      check(document.querySelector(".jr-routines"), "Installation keeps setup open");
+      equal(named("hideUI").length, hidden, "Installation does not navigate or hide setup");
+      check(!field("replaceExisting").checked, "Replacement approval reset after installation");
+      const page = pageBy(dailyTemplatePage), root = contentBlocks(page)[0];
+      equal(page.blocks.length, 2, "Only header and native template root at page level");
+      equal(headerOf(page).properties["jr-daily-template-state"], "ready", "Template header checkpoint ready");
+      equal(root.properties.template, dailyTemplateName, "Native template root registration");
+      equal(root.properties["template-including-parent"], false, "Native parent is excluded");
+      equal(root.properties["jr-daily-calendar"], "jalali", "Installed context matches current calendar");
+      equal(root.properties["jr-weekly-definition"], `page-uuid:${weeklySource.uuid}`, "Weekly definition context");
+      equal(root.properties["jr-monthly-definition"], `page-uuid:${monthlySource.uuid}`, "Monthly definition context");
+      equal(root.children.map(content), ["## 🎯 Focus", "## ☑️ Tasks", "## 🚩 Priority A", "## ⏳ Pending", "## 📅 This week"], "Five native sections");
+      check(root.children.every((section) => section.children.length === 1), "Each section has its native content child");
+      check(root.children.slice(2).every((section) => content(section.children[0]).includes("#+BEGIN_QUERY")), "Task sections use native queries");
+      equal(graphConfigs, { "default-templates": { journals: dailyTemplateName, pages: "Existing page template", extra: "preserve me" },
+        "preferred-format": "markdown" }, "Config map and unrelated top-level settings preserved");
+      equal(JSON.stringify([...pages.values()].filter((item) => item !== page)), before, "Only optional template page added; other pages unchanged");
+      equal(JSON.stringify(periods()), oldPeriods, "No routine period changes");
+      equal(JSON.stringify([populatedJournal, emptyJournal]), journalsBefore, "No writes to populated or empty journals");
+      equal(JSON.stringify(existingTemplate), existingTemplateBefore, "Original default template content preserved");
+    });
+    await test("repeated daily template installation preserves native content and performs no writes", async () => {
+      const before = JSON.stringify([...pages.values()]), config = clone(graphConfigs), count = writes().length;
+      check(!field("replaceExisting").checked, "Repeat does not reuse replacement approval");
+      await click("Install daily journal template");
+      equal(writes().length, count, "No repeat graph or config writes");
+      equal(JSON.stringify([...pages.values()]), before, "No template/journal/task rewriting on repeat");
+      equal(graphConfigs, config, "No repeated default configuration change");
+      check(document.querySelector(".jr-routines"), "Repeat keeps setup open");
+    });
+    await test("primary setup combines routines and daily installation, with an accurate missing-today result", async () => {
+      const count = writes().length, before = JSON.stringify([...pages.values()]);
+      check(field("includeDaily").checked, "Daily template is explicitly selected by default");
+      await click("Set up this graph");
+      equal(writes().length, count, "Existing resources and missing today are not rewritten/created");
+      equal(JSON.stringify([...pages.values()]), before, "Combined setup preserves graph content");
+      equal(named("todayQuery").length, 1, "Only one native today lookup, not a historical inventory");
+      check(document.querySelector(".jr-routines-feedback").textContent.includes("Today was left unchanged"), "Partial completion is reported accurately");
+      check(document.querySelector(".jr-routines-feedback").textContent.includes("Open today"), "Missing today has a native-navigation instruction");
+      check(document.querySelector(".jr-routines"), "Setup retains the result rather than silently closing");
+    });
+    await test("routine-only primary setup does not install or apply a daily template", async () => {
+      const count = writes().length, todayQueries = named("todayQuery").length, configs = clone(graphConfigs);
+      field("includeDaily").click(); await click("Set up this graph");
+      equal(named("todayQuery").length, todayQueries, "Opt-out performs no today lookup");
+      equal(writes().length, count, "Opt-out does not write template or journal blocks");
+      equal(graphConfigs, configs, "Opt-out preserves the existing daily default");
+      check(document.querySelector(".jr-routines-feedback").textContent.includes("daily journal default was left unchanged"), "Routine-only success is explicit");
+    });
     await test("switch back reuses original Gregorian tasks without Calendar invocation", async () => {
       const before = JSON.stringify(periods()), count = writes().length, calendarCalls = named("calendar").length;
+      const root = contentBlocks(pageBy(dailyTemplatePage))[0], sections = JSON.stringify(root.children);
+      const configs = clone(graphConfigs);
       selectCalendar("gregorian"); await click("Confirm calendar change"); await click("Save settings");
       equal(saved().calendar, "gregorian", "Switched back"); equal(JSON.stringify(periods()), before, "Both calendars retained");
-      equal(writes().length, count, "Switch back writes no graph content");
+      equal(writes().slice(count).map((call) => [call[0], call[1]]), [["updateBlock", root.uuid]], "Only the owned template root context is saved");
+      equal(root.properties["jr-daily-calendar"], "gregorian", "Template context follows calendar switch");
+      equal(JSON.stringify(root.children), sections, "Template section content and identities are never rewritten");
+      equal(graphConfigs, configs, "Calendar switch does not change default settings");
       equal(named("calendar").length, calendarCalls, "Gregorian switch needs no provider");
       check(contentBlocks(period("gregorian", "weekly"))[0].children[0].content.startsWith("DONE"), "Completion preserved");
     });
@@ -512,9 +646,14 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
     await test("fixture stayed exact-page, metadata-only, with no hidden browser errors", async () => {
       equal(named("unexpected"), [], "No broad graph scans or unsupported SDK calls");
       check(named("createPage").every((call) => call[2] === null), "Metadata pages created with null properties");
-      equal(named("updateBlock").length, 5, "Four period headers and one history header parsed from text");
-      equal(named("checkEditing").length, 5, "Each metadata write checks editing first");
-      const allowed = new Set([definitions.weekly, definitions.monthly, historyName,
+      const root = contentBlocks(pageBy(dailyTemplatePage))[0];
+      equal(named("updateBlock").filter((call) => call[1] !== root.uuid).length, 6, "Four period, history and daily-template headers parsed from text");
+      equal(named("updateBlock").filter((call) => call[1] === root.uuid).length, 1, "Only one template context save");
+      equal(named("checkEditing").length, 8, "Six bootstrap editing checks and two guarded context editing checks");
+      equal(named("setGraphConfigs").length, 1, "Only explicit installation changes the native default");
+      equal(JSON.stringify([populatedJournal, emptyJournal]), journalsBefore, "Fixture journals remain untouched throughout");
+      equal(JSON.stringify(existingTemplate), existingTemplateBefore, "Replaced default content remains intact throughout");
+      const allowed = new Set([definitions.weekly, definitions.monthly, historyName, dailyTemplatePage,
         ...periods().flatMap((page) => [page.originalName,
           `Journal & Routines — ${page.properties["jr-calendar"]} ${page.properties["jr-kind"]} — ${page.properties["jr-start"]} to ${page.properties["jr-end"]}`])]);
       check(named("getPage").every((call) => allowed.has(call[1])), "Only selected definition/current/history exact pages read");
@@ -593,8 +732,8 @@ async function main() {
     console.log(`Fixture pages created: ${report.summary.pagesCreated}; native sidebar requests: ${report.summary.sidebarRequests}; Calendar invocations (Jalali tests): ${report.summary.calendarInvocations}`);
     assert.equal(report.failure, undefined, report.failure);
     assert.equal(report.fixtureOnly, true);
-    assert.equal(report.summary.tests, 18, "All smoke scenarios must run");
-    assert.equal(report.summary.passed, 18, "All smoke scenarios must pass");
+    assert.equal(report.summary.tests, 22, "All smoke scenarios must run");
+    assert.equal(report.summary.passed, 22, "All smoke scenarios must pass");
   } finally {
     rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }

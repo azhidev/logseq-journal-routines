@@ -4,7 +4,7 @@ import { mountRoutinesView } from "./routines-view.js";
 /** Command registration and lazy setup UI; graph/task work belongs to the runtime. */
 export async function registerRoutines(sdk, { document = globalThis.document,
   runtime = createRoutinesRuntime({ sdk, document }), mountView = mountRoutinesView } = {}) {
-  let disposed = false, view = null, offGraph = null, viewGeneration = 0, actionGeneration = 0;
+  let disposed = false, view = null, offGraph = null, viewGeneration = 0, actionGeneration = 0, setupFeedback = null;
   function close() {
     viewGeneration++;
     if (!view) return;
@@ -21,7 +21,11 @@ export async function registerRoutines(sdk, { document = globalThis.document,
     await runtime.destroy();
   }
   sdk.beforeunload(destroy);
-  function render() { if (!disposed) view?.render(runtime.getStatus()); }
+  function viewStatus() {
+    const status = runtime.getStatus();
+    return { ...status, ...(setupFeedback?.graphKey === status.graphKey ? { setupMessage: setupFeedback.message } : {}) };
+  }
+  function render() { if (!disposed) view?.render(viewStatus()); }
   async function update(action) {
     const version = viewGeneration;
     try {
@@ -44,8 +48,35 @@ export async function registerRoutines(sdk, { document = globalThis.document,
       return status;
     });
   }
+  async function quickSetup(options, key, confirmation, { dailyTemplate = true, replaceExisting = false } = {}) {
+    const action = actionGeneration;
+    setupFeedback = null;
+    function check() {
+      if (disposed || action !== actionGeneration || runtime.getStatus().graphKey !== key) throw new Error("Setup action cancelled; graph or activation changed.");
+    }
+    return update(async () => {
+      await runtime.configure(options, key, confirmation); check();
+      await runtime.enable(key); check();
+      if (!dailyTemplate) {
+        setupFeedback = { graphKey: key, message: "Routines are ready. The daily journal default was left unchanged." };
+        return runtime.getStatus();
+      }
+      await runtime.installDailyTemplate(key, { replaceExisting }); check();
+      try {
+        const result = await runtime.applyDailyTemplateToday(key, { skipUnavailable: true }); check();
+        setupFeedback = { graphKey: key, message: result?.applied === false
+          ? `Routines and the daily template are ready. Today was left unchanged: ${result.reason}`
+          : "All set — routines and the daily template are ready, including today’s journal." };
+      } catch (error) {
+        check();
+        throw new Error(`Routines and the daily template are installed. Today’s application needs attention: ${error.message}`);
+      }
+      return runtime.getStatus();
+    });
+  }
   async function disable(key) {
     actionGeneration++;
+    setupFeedback = null;
     return update(() => runtime.disable(key));
   }
   async function navigate(action) {
@@ -62,19 +93,22 @@ export async function registerRoutines(sdk, { document = globalThis.document,
       view = mountView(document, {
         onSave: (options, key, confirmation) => configure(options, key, confirmation, false),
         onEnable: (options, key, confirmation) => configure(options, key, confirmation, true),
+        onQuickSetup: quickSetup,
         onDisable: disable,
         onShowCurrent: () => navigate(() => runtime.showCurrent()),
         onAddExamples: (key) => navigate(async () => {
           await runtime.addExamples(key);
           await runtime.showCurrent(key);
         }),
+        onInstallDailyTemplate: (key, options) => update(() => runtime.installDailyTemplate(key, options)),
+        onApplyDailyTemplateToday: (key) => navigate(() => runtime.applyDailyTemplateToday(key)),
         onShowHistory: () => navigate(() => runtime.showHistory()),
         onOpenDefinition: (kind) => navigate(() => runtime.openDefinition(kind)),
         onRefresh: () => update(() => runtime.refreshStatus()),
         onClose: close,
       });
     }
-    view.render(status);
+    view.render({ ...status, ...(setupFeedback?.graphKey === status.graphKey ? { setupMessage: setupFeedback.message } : {}) });
     sdk.setMainUIInlineStyle({ position: "fixed", inset: "0", width: "100%", height: "100%", zIndex: 1000 });
     sdk.showMainUI({ autoFocus: true });
     view.focus();
@@ -91,7 +125,7 @@ export async function registerRoutines(sdk, { document = globalThis.document,
     }
   }
   try {
-    offGraph = sdk.App.onCurrentGraphChanged(() => { actionGeneration++; close(); });
+    offGraph = sdk.App.onCurrentGraphChanged(() => { actionGeneration++; setupFeedback = null; close(); });
     for (const [key, label, action] of [
       ["setup", "Setup and settings", open],
       ["show", "Show current routines", () => navigate(() => runtime.showCurrent())],

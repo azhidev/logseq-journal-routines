@@ -3,6 +3,9 @@ import { createCalendarClient } from "./calendar-client.js";
 import { gregorianPeriods, localCivilDate, makePeriod, matchesPeriodMetadata } from "./period-model.js";
 import { createPeriodSnapshot } from "./period-snapshot.js";
 import { ensureRoutineHistory } from "./routine-history.js";
+import { installDailyJournalTemplate, syncDailyTemplateContext } from "./daily-template.js";
+import { applyDailyTemplateToToday } from "./daily-today.js";
+import { DAILY_PRESENTATION_STYLE } from "./daily-presentation.js";
 
 const SETTINGS = "journal-routines:routines:v1:";
 const SEEN = "journal-routines:period-seen:v1:";
@@ -58,7 +61,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
   }
   let started = false, destroyed = false, generation = 0, context = null;
   let queue = Promise.resolve(), timer = null, offGraph = null, observing = false;
-  let currentIds = null, lastDay = null, lastError = null, automatic = null;
+  let currentIds = null, lastDay = null, lastError = null, automatic = null, dailyTemplateWarning = null;
   const opened = new Set(), stopped = new Set(), clients = new Set();
   const sidebarRoots = new Map();
   function styleSidebarRoots() {
@@ -66,13 +69,19 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
     sdk.provideStyle({ key: "jr-sidebar-roots", style: [...sidebarRoots.values()].map(({ id, title }) => {
       const root = `#right-sidebar .ls-block[blockid="${id}"]`;
       const heading = `#right-sidebar .sidebar-item:has(.ls-block[blockid="${id}"]) > div > .sidebar-item-header .page-ref`;
-      const caption = JSON.stringify(title).replace(/</g, "\\3c ");
+      const cssText = (text) => JSON.stringify(text).replace(/</g, "\\3c ");
+      const detailed = typeof title === "object";
+      const caption = cssText(detailed ? title.label : title);
       // Presentation only: retain the native link, snapshot subtree and page identity.
       return `${root} > .block-main-container { display: none; }
         ${root} > .block-children-container { margin-left: 0; padding-left: 0; }
         ${root} > .block-children-container > .block-children-left-border { display: none; }
-        ${heading} { font-size: 0; }
-        ${heading}::after { content: ${caption}; font-size: 1rem; direction: rtl; unicode-bidi: isolate; display: inline-block; }`;
+        ${heading} { font-size: 0; display: inline-flex; flex-direction: column; align-items: stretch;
+          direction: ${detailed ? "rtl" : "ltr"}; line-height: 1.4; max-width: 100%; white-space: normal; }
+        ${heading}::before { content: ${caption}; font-size: 1rem; unicode-bidi: isolate; }
+        ${heading}::after { content: ${detailed ? cssText(title.range) : '""'}; font-size: 0.8rem;
+          font-weight: 400; opacity: 0.75; direction: ${detailed ? title.rangeDirection : "ltr"};
+          unicode-bidi: isolate; text-align: ${detailed ? "right" : "left"}; }`;
     }).join("\n") });
   }
   function clearSidebarStyles() {
@@ -98,6 +107,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
     currentIds = null;
     lastDay = null;
     automatic = null;
+    dailyTemplateWarning = null;
     for (const client of clients) void client.invalidate();
   }
   function active(ctx = context) { return !!ctx?.settings.enabled && !stopped.has(ctx.key); }
@@ -163,6 +173,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
         currentIds = null;
         lastDay = null;
         lastError = null;
+        dailyTemplateWarning = null;
       }
       if (context?.settings.calendar !== settings.calendar ||
         KINDS.some((kind) => context?.settings.definitions[kind] !== settings.definitions[kind])) {
@@ -183,7 +194,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       enabled: active(), calendar: context?.settings.calendar ?? null,
       autoOpen: context?.settings.autoOpen ?? null,
       definitions: context ? { ...context.settings.definitions } : null,
-      paused: !!context?.settings.enabled && stopped.has(context.key), error: lastError };
+      paused: !!context?.settings.enabled && stopped.has(context.key), error: lastError, dailyTemplateWarning };
   }
   function refreshStatus() {
     return enqueue(async (ticket) => {
@@ -243,10 +254,13 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       return {
         weekly: { ...makePeriod({ calendar, kind: "weekly", start: description.week.start, end: description.week.end,
           pageName: `${weekly} — ${description.week.start}` }), displayTitle: weekly,
-          sidebarTitle: `هفتهٔ ${digits.format(weekStart.persian.weekOfYear)} — ${weekRange}` },
+          sidebarTitle: { label: `هفتهٔ ${digits.format(weekStart.persian.weekOfYear)}`,
+            range: weekRange, rangeDirection: "rtl" } },
         monthly: { ...makePeriod({ calendar, kind: "monthly", start: description.month.start, end: description.month.end,
           pageName: `${monthly} — ${description.month.start}` }), displayTitle: monthly,
-          sidebarTitle: `${PERSIAN_MONTHS[description.persian.month - 1]} — \u2066${gregorianDay(description.month.start)}\u2069 – \u2066${gregorianDay(description.month.end)}\u2069` }
+          sidebarTitle: { label: PERSIAN_MONTHS[description.persian.month - 1],
+            range: `${gregorianDay(description.month.start)} – ${gregorianDay(description.month.end)}`,
+            rangeDirection: "ltr" } }
       };
     } catch (error) {
       await guard(ticket);
@@ -332,12 +346,22 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       opened.add(entry.period.id);
     }
   }
+  async function syncOptionalDailyTemplate(ctx, ticket) {
+    try {
+      await syncDailyTemplateContext({ sdk, storage, graphKey: ticket.key, guard: () => guard(ticket), settings: ctx.settings });
+      dailyTemplateWarning = null;
+    } catch (error) {
+      await guard(ticket);
+      dailyTemplateWarning = `Daily template context is unavailable; its task views may be outdated. ${error.message} Finish editing or inspect the template, then retry Install daily journal template. Routine settings are saved independently.`;
+    }
+  }
   async function runCurrent(ticket, force = false, skipOpen = false) {
     const ctx = await identityContext(ticket);
     if (!active(ctx)) return getStatus();
     try {
       const date = now(), day = localCivilDate(date);
       if (!force && lastDay === day) return getStatus();
+      await syncOptionalDailyTemplate(ctx, ticket);
       const selected = await periods(ctx.settings.calendar, ticket, date);
       await guard(ticket, true);
       const ids = KINDS.map((kind) => selected[kind].id);
@@ -395,6 +419,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
     if (destroyed) throw new Error("Routines runtime was destroyed.");
     if (started) return getStatus();
     started = true;
+    if (typeof sdk.provideStyle === "function") sdk.provideStyle({ key: "jr-daily-presentation", style: DAILY_PRESENTATION_STYLE });
     if (typeof sdk.App.onCurrentGraphChanged === "function") {
       offGraph = sdk.App.onCurrentGraphChanged(() => {
         invalidate();
@@ -450,6 +475,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       }
       await save(ctx, settings, ticket);
       if (changedCalendar || changedDefinitions) { currentIds = null; lastDay = null; }
+      if (changedCalendar || changedDefinitions) await syncOptionalDailyTemplate(ctx, ticket);
       lastError = null;
       // Configuration is settings-only. The UI awaits it before explicit Enable.
       return getStatus();
@@ -827,15 +853,53 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
     });
   }
 
+  function installDailyTemplate(expectedGraphKey, { replaceExisting = false } = {}) {
+    if (typeof expectedGraphKey !== "string" || !expectedGraphKey || typeof replaceExisting !== "boolean") {
+      return Promise.reject(new TypeError("Daily template installation requires the selected graph and explicit replacement choice."));
+    }
+    return enqueue(async (ticket) => {
+      const ctx = await identityContext(ticket);
+      if (!active(ctx)) throw new Error("Enable routines in this graph before installing its optional daily template.");
+      const result = await installDailyJournalTemplate({ sdk, storage, graphKey: ticket.key,
+        guard: () => guard(ticket, true), settings: ctx.settings, replaceExisting });
+      lastError = null;
+      dailyTemplateWarning = null;
+      if (sdk.UI?.showMsg) await checked(ticket, () => sdk.UI.showMsg(
+        "Daily journal template installed. Logseq applies it to eligible empty journals from today onward; populated journals are unchanged. Verify config persistence after reload.", "success"), true);
+      return { ...getStatus(), dailyTemplate: result };
+    }, expectedGraphKey);
+  }
+
+  function applyDailyTemplateToday(expectedGraphKey, { skipUnavailable = false } = {}) {
+    if (typeof expectedGraphKey !== "string" || !expectedGraphKey) return Promise.reject(new TypeError("Apply to today requires the selected graph key."));
+    return enqueue(async (ticket) => {
+      const ctx = await identityContext(ticket);
+      if (!active(ctx)) throw new Error("Enable routines before applying the daily template to today.");
+      let result;
+      try {
+        result = await applyDailyTemplateToToday({ sdk, storage, graphKey: ticket.key, guard: () => guard(ticket, true) });
+      } catch (error) {
+        await guard(ticket, true);
+        if (!skipUnavailable || !["today-not-empty", "today-missing", "today-previous-attempt"].includes(error.code)) throw error;
+        lastError = null;
+        return { applied: false, reason: error.message };
+      }
+      lastError = null;
+      if (typeof sdk.App.pushState === "function") await checked(ticket, () => sdk.App.pushState("page", { name: result.pageName }), true);
+      return { ...result, applied: true };
+    }, expectedGraphKey);
+  }
+
   async function destroy() {
     if (destroyed) return;
     destroyed = true;
     started = false;
     invalidate();
+    if (typeof sdk.provideStyle === "function") sdk.provideStyle({ key: "jr-daily-presentation", style: "" });
     offGraph?.();
     for (const client of clients) await client.destroy();
     storage.close?.();
   }
   return { start, destroy, enable, disable, configure, refreshStatus, showCurrent,
-    openDefinition, showHistory, addExamples, getStatus };
+    openDefinition, showHistory, addExamples, installDailyTemplate, applyDailyTemplateToday, getStatus };
 }

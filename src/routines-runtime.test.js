@@ -3,6 +3,7 @@ import test from "node:test";
 import { createRoutinesRuntime } from "./routines-runtime.js";
 import { gregorianPeriods, makePeriod } from "./period-model.js";
 import { HISTORY_PAGE, historyQuery } from "./routine-history.js";
+import { DAILY_TEMPLATE, DAILY_TEMPLATE_PAGE } from "./daily-template.js";
 
 // Recorded from Persian Calendar describeDate("2026-03-21"); no fake conversion API.
 const CALENDAR_DATE = {
@@ -20,7 +21,7 @@ const contentBlocks = (page) => page.blocks.filter((block) => !isHeader(block));
 const propertyContent = (properties) => Object.entries(properties).map(([key, value]) => `${key}:: ${value}`).join("\n");
 
 function fixture() {
-  const records = new Map(), graphs = new Map(), calls = [], listeners = new Set();
+  const records = new Map(), graphs = new Map(), calls = [], listeners = new Set(), graphConfigs = new Map();
   let graph = "/graph/a", graphName = "Same display name", next = 10, calendarAvailable = true, afterCreate = null;
   let date = new Date(2026, 2, 21, 12), nextTimer = 0;
   const timerTasks = new Map(), documentListeners = new Map();
@@ -62,6 +63,15 @@ function fixture() {
     provideStyle(options) { calls.push(["style", options]); },
     App: {
       async getCurrentGraph() { calls.push(["graph", graph]); return { path: graph, name: graphName }; },
+      async getCurrentGraphConfigs(key) { assert.equal(key, "default-templates"); return clone(graphConfigs.get(graph) ?? {}); },
+      async setCurrentGraphConfigs(value) { calls.push(["config", graph, clone(value)]); graphConfigs.set(graph, clone(value["default-templates"])); },
+      async getTemplate(name) {
+        for (const page of pages().values()) {
+          const root = page.blocks.find((block) => block.properties?.template === name);
+          if (root) return clone(root);
+        }
+        return null;
+      },
       onCurrentGraphChanged(callback) { listeners.add(callback); return () => listeners.delete(callback); },
       registerCommandPalette(options) { calls.push(["command", options.key]); },
       pushState(...args) { calls.push(["route", ...args]); },
@@ -118,6 +128,12 @@ function fixture() {
         const block = { id: ++next, uuid: options.customUUID, content, children: [],
           page: { id: (page ?? target.page).id }, parent: { id: parentId },
           left: { id: index === 0 ? parentId : list[index - 1].id } };
+        if (content.startsWith("Daily journal template\n")) {
+          block.properties = Object.fromEntries(content.split("\n").flatMap((line) => {
+            const match = /^([a-z][a-z-]*):: (.*)$/.exec(line);
+            return match ? [[match[1], match[2]]] : [];
+          }));
+        }
         list.splice(index, 0, block);
         if (list[index + 1]) list[index + 1].left = { id: block.id };
         return clone(block);
@@ -128,6 +144,14 @@ function fixture() {
         const target = find(id);
         assert.ok(target, "Metadata target must exist");
         const { block, page } = target;
+        if (block.properties?.template === DAILY_TEMPLATE) {
+          block.content = content;
+          block.properties = Object.fromEntries(content.split("\n").flatMap((line) => {
+            const match = /^([a-z][a-z-]*):: (.*)$/.exec(line);
+            return match ? [[match[1], match[2]]] : [];
+          }));
+          return;
+        }
         assert.equal(page.blocks[0], block, "Metadata must target the first page root");
         assert.equal(block.parent.id, page.id);
         assert.equal(block.left.id, page.id);
@@ -160,7 +184,7 @@ function fixture() {
   };
   const newRuntime = () => createRoutinesRuntime({ sdk, storage, now, timers, document });
   const runtime = newRuntime();
-  return { runtime, newRuntime, sdk, storage, records, pages, calls, listeners, now, timerTasks, documentListeners,
+  return { runtime, newRuntime, sdk, storage, records, pages, calls, listeners, now, timerTasks, documentListeners, graphConfigs,
     setDate(value) { date = value; },
     setGraphName(value) { graphName = value; },
     emit(event = "visibilitychange") { for (const listener of [...(documentListeners.get(event) ?? [])]) listener(); },
@@ -504,9 +528,14 @@ test("Gregorian never invokes Calendar; confirmed Jalali switching and back reus
   assert.equal(contentBlocks(f.pages().get(jalaliMonth.pageName))[0].content, "\u200B");
   const sidebarStyle = namedCalls(f, "style").at(-1)[1];
   assert.equal(sidebarStyle.key, "jr-sidebar-roots");
-  assert.ok(sidebarStyle.style.includes('content: "هفتهٔ ۱ — ۱ فروردین – ۷ فروردین"'));
-  assert.ok(sidebarStyle.style.includes('content: "فروردین — \u2066Mar 21\u2069 – \u2066Apr 20\u2069"'));
-  assert.ok(sidebarStyle.style.includes("direction: rtl; unicode-bidi: isolate; display: inline-block"));
+  assert.ok(sidebarStyle.style.includes('::before { content: "هفتهٔ ۱"; font-size: 1rem;'));
+  assert.ok(sidebarStyle.style.includes('::before { content: "فروردین"; font-size: 1rem;'));
+  assert.ok(sidebarStyle.style.includes('::after { content: "۱ فروردین – ۷ فروردین"; font-size: 0.8rem;'));
+  assert.ok(sidebarStyle.style.includes('::after { content: "Mar 21 – Apr 20"; font-size: 0.8rem;'));
+  assert.ok(sidebarStyle.style.includes("flex-direction: column; align-items: stretch"));
+  assert.ok(sidebarStyle.style.includes("opacity: 0.75; direction: rtl;"));
+  assert.ok(sidebarStyle.style.includes("opacity: 0.75; direction: ltr;"));
+  assert.ok(sidebarStyle.style.includes("unicode-bidi: isolate; text-align: right"));
   assert.equal(f.pages().size, 6);
   const saved = clone([...f.pages()]);
   await f.runtime.configure({ calendar: "gregorian" }, graphKey, { confirmCalendarChange: true });
@@ -1186,4 +1215,60 @@ test("history writes reject malformed block location and never retry the ambiguo
   await assert.rejects(f.runtime.showHistory(), /write is ambiguous/);
   await assert.rejects(f.runtime.showHistory(), /incomplete or ambiguous/);
   assert.equal(namedCalls(f, "insertBlock").length, 2, "One metadata bootstrap and one ambiguous query insert");
+});
+
+test("daily template installation is explicit, enabled and graph-pinned; Enable alone does not change defaults", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const { graphKey } = await f.runtime.start();
+  await assert.rejects(f.runtime.installDailyTemplate(), /selected graph/);
+  await assert.rejects(f.runtime.installDailyTemplate(graphKey), /Enable routines/);
+  await f.runtime.enable(graphKey);
+  assert.equal(f.pages().has(DAILY_TEMPLATE_PAGE), false);
+  assert.equal(namedCalls(f, "config").length, 0);
+  const periodTasks = clone([...f.pages()]);
+  await f.runtime.installDailyTemplate(graphKey);
+  assert.equal(f.graphConfigs.get("/graph/a").journals, DAILY_TEMPLATE);
+  assert.deepEqual([...f.pages()].filter(([name]) => name !== DAILY_TEMPLATE_PAGE), periodTasks);
+  const before = clone([...f.pages()]), writes = namedCalls(f, "insertBlock").length;
+  await f.runtime.installDailyTemplate(graphKey);
+  assert.deepEqual([...f.pages()], before); assert.equal(namedCalls(f, "insertBlock").length, writes);
+  f.switchGraph("/graph/b", false);
+  await assert.rejects(f.runtime.installDailyTemplate(graphKey), /Graph changed/);
+  assert.equal(f.pages().size, 0); assert.equal(f.graphConfigs.has("/graph/b"), false);
+});
+
+test("optional daily context failures do not block core settings; startup retries after editing finishes", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const { graphKey } = await f.runtime.start(); await f.runtime.enable(graphKey);
+  await f.runtime.installDailyTemplate(graphKey);
+  const root = contentBlocks(f.pages().get(DAILY_TEMPLATE_PAGE))[0];
+  const sections = clone(root.children);
+  f.sdk.Editor.checkEditing = async () => root.uuid;
+  const changed = await f.runtime.configure({ calendar: "jalali" }, graphKey, { confirmCalendarChange: true });
+  assert.equal(changed.calendar, "jalali"); assert.match(changed.dailyTemplateWarning, /may be outdated/);
+  assert.equal(root.properties["jr-daily-calendar"], "gregorian");
+  await f.runtime.configure({ autoOpen: false }, graphKey);
+  assert.equal(f.runtime.getStatus().autoOpen, false, "unrelated settings save independently");
+  f.sdk.Editor.checkEditing = async () => false;
+  await f.runtime.destroy();
+  const reloaded = f.newRuntime(); t.after(() => reloaded.destroy()); await reloaded.start();
+  assert.equal(root.properties["jr-daily-calendar"], "jalali");
+  assert.equal(reloaded.getStatus().dailyTemplateWarning, null);
+  assert.deepEqual(root.children, sections, "startup updates context only, never daily sections");
+});
+
+test("interrupted optional daily installation cannot prevent later routine settings saves", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const { graphKey } = await f.runtime.start(); await f.runtime.enable(graphKey);
+  const insert = f.sdk.Editor.insertBlock;
+  f.sdk.Editor.insertBlock = async (...args) => {
+    if (args[1] === "## 🎯 Focus") throw new Error("interrupted template");
+    return insert(...args);
+  };
+  await assert.rejects(f.runtime.installDailyTemplate(graphKey), /interrupted template/);
+  const before = clone(f.pages().get(DAILY_TEMPLATE_PAGE));
+  await f.runtime.configure({ autoOpen: false }, graphKey);
+  const result = await f.runtime.configure({ calendar: "jalali" }, graphKey, { confirmCalendarChange: true });
+  assert.equal(result.calendar, "jalali"); assert.match(result.dailyTemplateWarning, /incomplete/);
+  assert.deepEqual(f.pages().get(DAILY_TEMPLATE_PAGE), before);
 });

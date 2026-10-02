@@ -74,8 +74,8 @@ function fixture(handlers = {}) {
   previous.focus();
   const calls = [];
   const defaults = Object.fromEntries([
-    "onSave", "onEnable", "onDisable", "onShowCurrent", "onShowHistory", "onAddExamples",
-    "onOpenDefinition", "onRefresh", "onClose",
+    "onSave", "onEnable", "onQuickSetup", "onDisable", "onShowCurrent", "onShowHistory", "onAddExamples",
+    "onInstallDailyTemplate", "onApplyDailyTemplateToday", "onOpenDefinition", "onRefresh", "onClose",
   ].map((name) => [name, (...args) => { calls.push([name, ...args]); }]));
   const view = mountRoutinesView(document, { ...defaults, ...handlers });
   const overlay = document.body.children[1], panel = overlay.children[0];
@@ -87,6 +87,7 @@ function fixture(handlers = {}) {
   };
   const inputs = panel.querySelectorAll("input, select");
   const input = (name) => inputs.find((node) => node.name === name);
+  button("More options").click();
   const calendar = input("calendar");
   return { document, previous, calls, view, overlay, panel, buttons, inputs, button, input, calendar,
     confirmation: button("Confirm calendar change").parent,
@@ -160,6 +161,39 @@ test("authoritative status safely renders graph, error, enabled state and input 
   assert.equal(h.button("Add two Persian examples per routine").disabled, true);
   assert.equal(h.button("History").disabled, false);
   h.view.destroy();
+});
+
+test("quick setup exposes one explicit primary action and collapses manual controls", async () => {
+  const h = fixture(); h.button("More options").click();
+  const primary = h.button("Set up this graph");
+  h.view.render(ready());
+  assert.equal(h.input("includeDaily").checked, true);
+  assert.equal(h.button("Enable").visible, false);
+  assert.equal(h.button("Install daily journal template").visible, false);
+  assert.equal(h.input("calendar").visible, true);
+  h.input("replaceExisting").click(); primary.click(); await tick();
+  assert.deepEqual(h.calls[0], ["onQuickSetup", { calendar: "gregorian", autoOpen: true,
+    definitions: { weekly: "Weekly routines", monthly: "Monthly routines" } }, "graph:a", {},
+    { dailyTemplate: true, replaceExisting: true }]);
+  assert.equal(h.input("replaceExisting").checked, false);
+  h.input("includeDaily").click(); primary.click(); await tick();
+  assert.equal(h.calls[1][4].dailyTemplate, false);
+  h.view.render(ready({ enabled: true, setupMessage: "All set <unsafe>" }));
+  const feedback = h.panel.querySelectorAll("p").find((node) => node.className === "jr-routines-feedback");
+  assert.equal(feedback.textContent, "All set <unsafe>"); assert.equal(feedback.hidden, false);
+});
+
+test("primary setup locks duplicate actions and requires calendar approval", async () => {
+  const work = deferred(), calls = [];
+  const h = fixture({ onQuickSetup: (...args) => { calls.push(args); return work.promise; } });
+  h.view.render(ready()); h.select("jalali");
+  const primary = h.button("Set up this graph"); assert.equal(primary.disabled, true);
+  h.button("Confirm calendar change").click(); primary.click();
+  assert.equal(primary.textContent, "Setting up…"); assert.equal(primary.disabled, true);
+  primary.dispatch("click"); assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0][2], { confirmCalendarChange: true });
+  work.resolve(); await tick(); assert.equal(primary.disabled, true, "render/save must confirm the authoritative calendar first");
+  h.view.render(ready({ calendar: "jalali", enabled: true })); assert.equal(primary.disabled, false);
 });
 
 test("Save and Enable each pass options, captured graph key and configure-compatible approval", async () => {
@@ -266,6 +300,181 @@ test("selection edits, refresh and every authoritative render revoke approval, i
   h.view.destroy();
 });
 
+test("daily template installation is optional, graph-pinned and explicitly authorizes replacement", async () => {
+  const h = fixture(), install = h.button("Install daily journal template");
+  assert.equal(install.disabled, true);
+  assert.equal(h.input("replaceExisting").checked, false);
+  assert.match(h.panel.textContent, /Install separately from Enable/);
+  assert.match(h.panel.textContent, /Focus and Tasks/);
+  assert.match(h.panel.textContent, /Priority A shows unfinished priority-A tasks, excluding WAITING/);
+  assert.match(h.panel.textContent, /Pending shows WAITING tasks/);
+  assert.match(h.panel.textContent, /This week shows original weekly routine tasks and tasks scheduled or due this week, without copying/);
+  assert.match(h.panel.textContent, /eligible empty today\/future journals, not populated journals/);
+  assert.match(h.panel.textContent, /never replaced without your approval/);
+  assert.match(h.panel.textContent, /Replace an existing default journal template \(its content is preserved\)/);
+  h.view.render(ready());
+  install.dispatch("click");
+  assert.equal(install.disabled, true);
+  assert.deepEqual(h.calls, []);
+  h.button("Enable").click();
+  await tick();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0][0], "onEnable");
+  assert.equal(install.disabled, true);
+  h.view.render(ready({ enabled: true }));
+  install.click();
+  assert.deepEqual(h.calls[1], ["onInstallDailyTemplate", "graph:a", { replaceExisting: false }]);
+  await tick();
+  h.input("replaceExisting").click();
+  install.click();
+  assert.deepEqual(h.calls[2], ["onInstallDailyTemplate", "graph:a", { replaceExisting: true }]);
+  assert.equal(h.input("replaceExisting").checked, false);
+  await tick();
+  assert.equal(h.panel.isConnected, true);
+  assert.equal(h.calls.some(([name]) => name === "onClose"), false);
+  h.view.destroy();
+});
+
+test("daily template installer blocks unsaved calendar changes and resets replacement approval on status or graph render", () => {
+  const h = fixture(), install = h.button("Install daily journal template"), approval = h.input("replaceExisting");
+  const state = ready({ enabled: true });
+  h.view.render(state);
+  approval.click();
+  assert.equal(approval.checked, true);
+  h.view.render(state);
+  assert.equal(approval.checked, false);
+  approval.click();
+  state.graphKey = "graph:b";
+  h.view.render(state);
+  assert.equal(approval.checked, false);
+  h.select("jalali");
+  assert.equal(install.disabled, true);
+  assert.equal(approval.disabled, true);
+  install.dispatch("click");
+  h.button("Confirm calendar change").click();
+  assert.equal(install.disabled, true);
+  install.dispatch("click");
+  assert.deepEqual(h.calls, []);
+  h.select("gregorian");
+  assert.equal(install.disabled, false);
+  install.click();
+  assert.deepEqual(h.calls, [["onInstallDailyTemplate", "graph:b", { replaceExisting: false }]]);
+  h.view.destroy();
+});
+
+test("daily template installation locks busy controls and reports failures without retaining replacement approval", async () => {
+  const work = deferred(), calls = [];
+  const h = fixture({ onInstallDailyTemplate: (...args) => { calls.push(args); return work.promise; } });
+  h.view.render(ready({ enabled: true }));
+  h.input("replaceExisting").click();
+  const install = h.button("Install daily journal template");
+  install.click();
+  assert.equal(h.panel.attributes["aria-busy"], "true");
+  assert.equal(install.disabled, true);
+  assert.equal(h.button("Apply daily template to today").disabled, true);
+  h.button("Apply daily template to today").dispatch("click");
+  assert.equal(h.input("replaceExisting").disabled, true);
+  assert.equal(h.button("Save settings").disabled, true);
+  install.dispatch("click");
+  h.button("History").dispatch("click");
+  h.view.render(ready({ enabled: true }));
+  assert.equal(install.disabled, true);
+  assert.equal(h.button("Disable").disabled, false);
+  assert.equal(h.button("Close").disabled, false);
+  assert.deepEqual(calls, [["graph:a", { replaceExisting: true }]]);
+  work.resolve();
+  await tick();
+  assert.equal(install.disabled, false);
+  assert.equal(h.input("replaceExisting").checked, false);
+  h.view.destroy();
+
+  const failed = fixture({ onInstallDailyTemplate: () => { throw new Error("Default template already exists"); } });
+  failed.view.render(ready({ enabled: true }));
+  failed.input("replaceExisting").click();
+  failed.button("Install daily journal template").click();
+  await tick();
+  assert.equal(failed.error.textContent, "Default template already exists");
+  assert.equal(failed.button("Install daily journal template").disabled, false);
+  assert.equal(failed.input("replaceExisting").checked, false);
+  failed.view.destroy();
+});
+
+test("apply-to-today is a separate graph-scoped action gated on enabled saved calendar", async () => {
+  const h = fixture(), apply = h.button("Apply daily template to today");
+  assert.equal(apply.disabled, true);
+  assert.match(h.panel.textContent, /native default applies to eligible future pages but may skip today’s preexisting blank block/);
+  assert.match(h.panel.textContent, /actual native today only if its journal is empty or has one blank block; populated journals are refused/);
+  assert.match(h.panel.textContent, /Install may refresh icons and compact queries in untouched generated template sections, but preserves user edits/);
+  assert.ok(apply.parent.children.indexOf(apply) > apply.parent.children.indexOf(h.button("Install daily journal template")));
+  h.view.render(ready());
+  apply.dispatch("click");
+  assert.deepEqual(h.calls, []);
+  h.view.render(ready({ enabled: true }));
+  h.select("jalali");
+  assert.equal(apply.disabled, true);
+  apply.dispatch("click");
+  h.button("Confirm calendar change").click();
+  assert.equal(apply.disabled, true, "confirmation is not a saved calendar change");
+  apply.dispatch("click");
+  assert.deepEqual(h.calls, []);
+  h.select("gregorian");
+  h.input("replaceExisting").click();
+  apply.click();
+  assert.deepEqual(h.calls, [["onApplyDailyTemplateToday", "graph:a"]], "replacement checkbox is not an apply argument");
+  await tick();
+  h.view.render(ready({ graphKey: "graph:b", enabled: true }));
+  apply.click();
+  assert.deepEqual(h.calls[1], ["onApplyDailyTemplateToday", "graph:b"]);
+  await tick();
+  h.view.render(ready({ enabled: false }));
+  assert.equal(apply.disabled, true);
+  h.view.destroy();
+});
+
+test("apply-to-today busy lock blocks duplicate/cross-action work and preserves errors in setup", async () => {
+  const work = deferred(), calls = [];
+  const h = fixture({ onApplyDailyTemplateToday: (...args) => { calls.push(args); return work.promise; } });
+  h.view.render(ready({ enabled: true }));
+  const apply = h.button("Apply daily template to today");
+  apply.click();
+  assert.equal(h.panel.attributes["aria-busy"], "true");
+  for (const label of ["Apply daily template to today", "Install daily journal template", "Save settings", "History", "Refresh"]) {
+    assert.equal(h.button(label).disabled, true);
+    h.button(label).dispatch("click");
+  }
+  assert.deepEqual(calls, [["graph:a"]]);
+  assert.deepEqual(h.calls, []);
+  assert.equal(h.button("Disable").disabled, false);
+  assert.equal(h.button("Close").disabled, false);
+  work.reject(new Error("Today’s journal is populated"));
+  await tick();
+  assert.equal(h.error.textContent, "Today’s journal is populated");
+  assert.equal(apply.disabled, false);
+  assert.equal(h.panel.isConnected, true);
+  h.view.destroy();
+});
+
+test("stale apply-to-today completion cannot unlock or report against another graph's action", async () => {
+  const first = deferred(), second = deferred(), calls = [];
+  const h = fixture({ onApplyDailyTemplateToday: (...args) => {
+    calls.push(args); return calls.length === 1 ? first.promise : second.promise;
+  } });
+  h.view.render(ready({ enabled: true }));
+  h.button("Apply daily template to today").click();
+  h.view.render(ready({ enabled: true, graphKey: "graph:b" }));
+  assert.equal(h.button("Apply daily template to today").disabled, false);
+  h.button("Apply daily template to today").click();
+  assert.deepEqual(calls, [["graph:a"], ["graph:b"]]);
+  first.reject(new Error("Stale graph A"));
+  await tick();
+  assert.equal(h.error.hidden, true);
+  assert.equal(h.button("Apply daily template to today").disabled, true);
+  second.resolve();
+  await tick();
+  assert.equal(h.button("Apply daily template to today").disabled, false);
+  h.view.destroy();
+});
+
 test("all navigation, refresh, disable and close callbacks use the documented arguments", async () => {
   const h = fixture();
   h.view.render(ready({ enabled: true }));
@@ -292,7 +501,7 @@ test("async busy lock blocks duplicate work across renders but Disable and Close
   assert.equal(h.panel.attributes["aria-busy"], "true");
   h.view.render(ready());
   assert.ok(h.inputs.every((node) => node.disabled));
-  for (const label of ["Enable", "Save settings", "History", "Refresh", "Open weekly definition"]) {
+  for (const label of ["Enable", "Save settings", "Install daily journal template", "Apply daily template to today", "History", "Refresh", "Open weekly definition"]) {
     assert.equal(h.button(label).disabled, true);
     h.button(label).dispatch("click");
   }
