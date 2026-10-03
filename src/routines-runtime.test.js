@@ -195,6 +195,11 @@ function fixture() {
   };
 }
 const namedCalls = (f, name) => f.calls.filter((call) => call[0] === name);
+const initializationKey = (graphKey) => `journal-routines:initialization:v1:${graphKey}`;
+const exampleRecord = (f) => f.records.get([...f.records.keys()].find((key) => key.startsWith("journal-routines:examples:v1:")));
+const graphEffects = (f) => f.calls.filter((call) => [
+  "createPage", "insertBlock", "updateBlock", "property", "config", "sidebar", "route",
+].includes(call[0]));
 
 function currentPeriods(f) {
   const selected = gregorianPeriods(f.now());
@@ -251,6 +256,354 @@ test("setup after skipping preserves existing empty definitions and repeat setup
   assert.deepEqual([...f.pages()], before);
 });
 
+for (const onboarding of ["pending", "skipped", "completed"]) {
+  test(`failed starter insert stays unfinished across reload and explicit retry with ${onboarding} preferences`, async (t) => {
+    const f = fixture(); t.after(() => f.runtime.destroy());
+    const first = await f.runtime.start();
+    await f.runtime.configure({ autoOpen: false }, first.graphKey);
+    const settingsKey = [...f.records.keys()].find((key) => key.includes("routines:v1:"));
+    f.records.get(settingsKey).onboarding = onboarding;
+    await f.runtime.refreshStatus();
+    const insert = f.sdk.Editor.insertBlock;
+    f.sdk.Editor.insertBlock = async (anchor, content, options) => {
+      if (content.startsWith("TODO ")) {
+        assert.equal(f.records.get(initializationKey(first.graphKey)).state, "pending");
+        assert.equal(f.records.get(initializationKey(first.graphKey)).phase, "examples");
+        assert.equal(exampleRecord(f).completed, false, "intent precedes the SDK write");
+        throw new Error("starter write uncertain");
+      }
+      return insert(anchor, content, options);
+    };
+    await assert.rejects(f.runtime.enable(first.graphKey), /starter write uncertain/);
+    assert.equal(f.runtime.getStatus().onboarding, onboarding);
+    assert.equal(f.runtime.getStatus().enabled, true);
+    assert.equal(f.runtime.getStatus().initialization, "pending");
+    assert.equal(namedCalls(f, "sidebar").length, 0);
+    f.sdk.Editor.insertBlock = insert;
+    const before = clone([...f.pages()]);
+    const record = clone(f.records.get(initializationKey(first.graphKey)));
+    const effects = clone(graphEffects(f));
+    await f.runtime.destroy();
+    const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+    const status = await reloaded.start();
+    assert.equal(status.onboarding, onboarding);
+    assert.equal(status.initialization, "pending");
+    assert.match(status.error, /initialization is unfinished/i);
+    await reloaded.refreshStatus();
+    await assert.rejects(reloaded.showCurrent(), /initialization is unfinished/i);
+    assert.deepEqual(f.records.get(initializationKey(first.graphKey)), record);
+    assert.deepEqual(graphEffects(f), effects, "startup/status/navigation cannot resume initialization");
+    await assert.rejects(reloaded.enable(first.graphKey), /ambiguous|deleted/);
+    assert.equal(reloaded.getStatus().onboarding, onboarding);
+    assert.equal(reloaded.getStatus().initialization, "pending");
+    assert.equal(exampleRecord(f).completed, false);
+    assert.deepEqual([...f.pages()], before);
+    assert.deepEqual(graphEffects(f), effects, "explicit retry must not refill a missing attempted block");
+  });
+}
+
+test("skipping after failed initialization does not hide its durable pending warning", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  const insert = f.sdk.Editor.insertBlock;
+  f.sdk.Editor.insertBlock = async (...args) => {
+    if (args[1].startsWith("TODO ")) throw new Error("starter failed");
+    return insert(...args);
+  };
+  await assert.rejects(f.runtime.enable(first.graphKey), /starter failed/);
+  const before = clone([...f.pages()]);
+  const effects = clone(graphEffects(f));
+  await f.runtime.skipOnboarding(first.graphKey);
+  assert.equal((await f.runtime.refreshStatus()).onboarding, "skipped");
+  assert.equal(f.runtime.getStatus().initialization, "pending");
+  await f.runtime.destroy();
+  const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+  const status = await reloaded.start();
+  assert.equal(status.onboarding, "skipped");
+  assert.equal(status.initialization, "pending");
+  assert.match(status.error, /initialization is unfinished/i);
+  await assert.rejects(reloaded.showCurrent(), /initialization is unfinished/i);
+  assert.deepEqual([...f.pages()], before);
+  assert.deepEqual(graphEffects(f), effects);
+});
+
+for (const edited of [false, true]) {
+  test(`lost starter acknowledgement ${edited ? "preserves edited partial pages and pauses" : "completes only on read-verified explicit retry without duplicates"}`, async (t) => {
+    const f = fixture(); t.after(() => f.runtime.destroy());
+    const first = await f.runtime.start();
+    const insert = f.sdk.Editor.insertBlock;
+    let lost = false;
+    f.sdk.Editor.insertBlock = async (...args) => {
+      const result = await insert(...args);
+      if (!lost && args[1].startsWith("TODO ")) {
+        lost = true;
+        throw new Error("lost starter acknowledgement");
+      }
+      return result;
+    };
+    await assert.rejects(f.runtime.enable(first.graphKey), /lost starter acknowledgement/);
+    assert.equal(exampleRecord(f).completed, false);
+    assert.equal(f.runtime.getStatus().initialization, "pending");
+    const weekly = f.pages().get(currentPeriods(f).weekly.pageName);
+    const sample = contentBlocks(weekly)[0].children[0];
+    assert.ok(sample.content.startsWith("TODO "));
+    const sampleId = sample.uuid;
+    if (edited) sample.content = "DONE preserved user edit";
+    const before = clone([...f.pages()]);
+    const effects = clone(graphEffects(f));
+    const creates = namedCalls(f, "createPage").length;
+    await f.runtime.destroy();
+    const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+    assert.match((await reloaded.start()).error, /initialization is unfinished/i);
+    await assert.rejects(reloaded.showCurrent(), /initialization is unfinished/i);
+    assert.deepEqual([...f.pages()], before);
+    assert.deepEqual(graphEffects(f), effects);
+    if (edited) {
+      await assert.rejects(reloaded.enable(first.graphKey), /content other than unchanged examples|Unexpected content/i);
+      assert.deepEqual([...f.pages()], before);
+      assert.deepEqual(graphEffects(f), effects);
+      assert.equal(reloaded.getStatus().initialization, "pending");
+      assert.equal(exampleRecord(f).completed, false);
+    } else {
+      const completed = await reloaded.enable(first.graphKey);
+      assert.equal(completed.initialization, "verified");
+      assert.equal(completed.onboarding, "completed");
+      assert.equal(f.records.get(initializationKey(first.graphKey)).state, "verified");
+      assert.equal(exampleRecord(f).completed, true);
+      assert.equal(contentBlocks(weekly)[0].children[0].uuid, sampleId);
+      for (const kind of ["weekly", "monthly"]) {
+        const summary = contentBlocks(f.pages().get(currentPeriods(f)[kind].pageName))[0];
+        const definition = f.pages().get(completed.definitions[kind]);
+        assert.equal(summary.children.length, 2);
+        assert.equal(new Set(summary.children.map((block) => block.uuid)).size, 2);
+        assert.deepEqual(contentBlocks(definition).map((block) => block.content), summary.children.map((block) => block.content));
+      }
+      assert.equal(namedCalls(f, "createPage").length, creates);
+      const completedEffects = clone(graphEffects(f));
+      await reloaded.enable(first.graphKey);
+      assert.deepEqual(graphEffects(f), completedEffects, "repeat Enable must not insert or navigate again");
+    }
+  });
+}
+
+test("new definitions preserve native title headers without metadata writes and still seed once", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  const headers = new Map();
+  f.afterCreate((name) => {
+    if (!Object.values(first.definitions).includes(name)) return;
+    const page = f.pages().get(name);
+    const header = { id: page.id + 1000, uuid: uuid(page.id + 1000), preBlock: true,
+      content: `title:: ${name}`, properties: { title: name }, format: "markdown", children: [],
+      page: { id: page.id }, parent: { id: page.id }, left: { id: page.id } };
+    page.blocks.push(header);
+    headers.set(name, clone(header));
+  });
+  await f.runtime.enable(first.graphKey);
+  for (const [name, header] of headers) {
+    const page = f.pages().get(name);
+    assert.deepEqual(headerOf(page), header);
+    assert.deepEqual(page.properties, {}, "native title mirror need not be populated");
+    assert.equal(contentBlocks(page).length, 2);
+    assert.ok(!namedCalls(f, "updateBlock").some((call) => call[2] === header.uuid));
+  }
+  const effects = clone(graphEffects(f));
+  await f.runtime.enable(first.graphKey);
+  assert.deepEqual(graphEffects(f), effects);
+});
+
+for (const defect of ["acknowledgement", "properties", "content", "tree"]) {
+  test(`unverified definition ${defect} keeps intent pending and is never adopted on reload`, async (t) => {
+    const f = fixture(); t.after(() => f.runtime.destroy());
+    const first = await f.runtime.start();
+    const create = f.sdk.Editor.createPage;
+    f.sdk.Editor.createPage = async (...args) => {
+      const ack = await create(...args);
+      if (args[0] !== first.definitions.weekly) return ack;
+      const page = f.pages().get(args[0]);
+      if (defect === "acknowledgement") return { ...ack, name: "Different page" };
+      if (defect === "properties") page.properties.tags = "User property";
+      if (defect === "content") page.blocks.push({ id: 999, uuid: uuid(999), content: "User note", children: [],
+        page: { id: page.id }, parent: { id: page.id }, left: { id: page.id } });
+      return ack;
+    };
+    if (defect === "tree") f.sdk.Editor.getPageBlocksTree = async () => undefined;
+    await assert.rejects(f.runtime.enable(first.graphKey), /Definition creation outcome is ambiguous/);
+    assert.equal(f.records.get(initializationKey(first.graphKey)).phase, "definitions");
+    assert.equal(f.runtime.getStatus().enabled, false);
+    assert.equal(namedCalls(f, "createPage").length, 1);
+    assert.equal(namedCalls(f, "insertBlock").length, 0);
+    assert.equal(namedCalls(f, "updateBlock").length, 0);
+    const pages = clone([...f.pages()]);
+    const effects = clone(graphEffects(f));
+    await f.runtime.destroy();
+    const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+    await reloaded.start();
+    await assert.rejects(reloaded.enable(first.graphKey), /Definition creation outcome is ambiguous/);
+    assert.deepEqual([...f.pages()], pages);
+    assert.deepEqual(graphEffects(f), effects);
+  });
+}
+
+test("definition appearing after initial preflight is preserved rather than adopted", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  const get = f.sdk.Editor.getPage;
+  let reads = 0;
+  f.sdk.Editor.getPage = async (name) => {
+    if (name === first.definitions.weekly && ++reads === 2) {
+      f.pages().set(name, { id: 1, uuid: uuid(1), name, properties: { tags: "mine" }, blocks: [], format: "markdown" });
+    }
+    return get(name);
+  };
+  await assert.rejects(f.runtime.enable(first.graphKey), /already exists/);
+  assert.deepEqual(f.pages().get(first.definitions.weekly).properties, { tags: "mine" });
+  assert.equal(namedCalls(f, "createPage").length, 0);
+  assert.equal(f.records.get(initializationKey(first.graphKey)).phase, "definitions");
+});
+
+test("graph switch during definition tree verification stops before further writes", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  const tree = f.sdk.Editor.getPageBlocksTree;
+  f.sdk.Editor.getPageBlocksTree = async (...args) => {
+    const result = await tree(...args);
+    f.switchGraph("/graph/b");
+    return result;
+  };
+  await assert.rejects(f.runtime.enable(first.graphKey), /cancelled|Graph changed/);
+  assert.equal(namedCalls(f, "createPage").length, 1);
+  assert.equal(namedCalls(f, "insertBlock").length, 0);
+  assert.equal(namedCalls(f, "updateBlock").length, 0);
+  assert.equal(f.pages("/graph/b").size, 0);
+  assert.equal(f.records.get(initializationKey(first.graphKey)).phase, "definitions");
+});
+
+test("initialization intent is saved before definition writes and ambiguous definitions are never adopted on retry", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  f.afterCreate((name) => {
+    if (name !== first.definitions.weekly) return;
+    const record = f.records.get(initializationKey(first.graphKey));
+    assert.equal(record.state, "pending");
+    assert.equal(record.phase, "definitions");
+    assert.deepEqual(record.definitions, first.definitions);
+    assert.deepEqual(record.periods, Object.fromEntries(Object.entries(currentPeriods(f)).map(([kind, period]) => [kind, period.id])));
+    throw new Error("lost definition acknowledgement");
+  });
+  await assert.rejects(f.runtime.enable(first.graphKey), /Definition creation outcome is ambiguous/);
+  const before = clone([...f.pages()]);
+  const effects = clone(graphEffects(f));
+  await f.runtime.destroy();
+  const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+  assert.match((await reloaded.start()).error, /initialization is unfinished/i);
+  await assert.rejects(reloaded.enable(first.graphKey), /Definition creation outcome is ambiguous/);
+  assert.equal(reloaded.getStatus().initialization, "pending");
+  assert.deepEqual([...f.pages()], before);
+  assert.deepEqual(graphEffects(f), effects);
+});
+
+for (const changed of ["calendar", "definitions", "periods"]) {
+  test(`explicit initialization retry refuses changed ${changed} without new writes`, async (t) => {
+    const f = fixture(); t.after(() => f.runtime.destroy());
+    const first = await f.runtime.start();
+    const insert = f.sdk.Editor.insertBlock;
+    f.sdk.Editor.insertBlock = async (...args) => {
+      if (args[1].startsWith("TODO ")) throw new Error("starter failed");
+      return insert(...args);
+    };
+    await assert.rejects(f.runtime.enable(first.graphKey), /starter failed/);
+    f.sdk.Editor.insertBlock = insert;
+    const settingsKey = [...f.records.keys()].find((key) => key.includes("routines:v1:"));
+    if (changed === "calendar") f.records.get(settingsKey).calendar = "jalali";
+    if (changed === "definitions") f.records.get(settingsKey).definitions.weekly = "Another weekly source";
+    if (changed === "periods") f.setDate(new Date(2026, 3, 1, 12));
+    const before = clone([...f.pages()]);
+    const record = clone(f.records.get(initializationKey(first.graphKey)));
+    const effects = clone(graphEffects(f));
+    await f.runtime.destroy();
+    const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+    await reloaded.start();
+    await assert.rejects(reloaded.enable(first.graphKey), /different settings or periods/);
+    assert.deepEqual(f.records.get(initializationKey(first.graphKey)), record);
+    assert.deepEqual([...f.pages()], before);
+    assert.deepEqual(graphEffects(f), effects);
+  });
+}
+
+test("rollover during definition creation cannot initialize different periods or verify the old attempt", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  const originalPeriods = currentPeriods(f);
+  f.afterCreate((name) => {
+    if (name === first.definitions.monthly) f.setDate(new Date(2026, 3, 1, 12));
+  });
+  await assert.rejects(f.runtime.enable(first.graphKey), /periods changed during initialization/);
+  const record = f.records.get(initializationKey(first.graphKey));
+  assert.equal(record.state, "pending");
+  assert.deepEqual(record.periods, Object.fromEntries(Object.entries(originalPeriods).map(([kind, period]) => [kind, period.id])));
+  assert.equal(f.pages().size, 2, "only approved definition creation occurred before rollover was detected");
+  assert.equal(namedCalls(f, "sidebar").length, 0);
+  assert.equal(exampleRecord(f), undefined);
+  const before = clone([...f.pages()]);
+  await assert.rejects(f.runtime.enable(first.graphKey), /different settings or periods/);
+  assert.deepEqual([...f.pages()], before);
+});
+
+test("explicit retry read-verifies an interrupted period snapshot without duplicate creation", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  for (const [index, name] of Object.values(first.definitions).entries()) {
+    f.pages().set(name, { id: index + 1, uuid: uuid(index + 1), name, properties: {}, format: "markdown", blocks: [] });
+  }
+  const insert = f.sdk.Editor.insertBlock;
+  let lost = false;
+  f.sdk.Editor.insertBlock = async (...args) => {
+    const result = await insert(...args);
+    if (!lost && args[1] === "\u200B") { lost = true; throw new Error("lost summary acknowledgement"); }
+    return result;
+  };
+  await assert.rejects(f.runtime.enable(first.graphKey), /ambiguous|acknowledgement/);
+  assert.equal(f.records.get(initializationKey(first.graphKey)).phase, "periods");
+  const weekly = f.pages().get(currentPeriods(f).weekly.pageName);
+  const summaryId = contentBlocks(weekly)[0].uuid;
+  const effects = clone(graphEffects(f));
+  await f.runtime.destroy();
+  const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+  assert.match((await reloaded.start()).error, /initialization is unfinished/i);
+  assert.deepEqual(graphEffects(f), effects);
+  assert.equal((await reloaded.enable(first.graphKey)).initialization, "verified");
+  assert.equal(contentBlocks(weekly).length, 1);
+  assert.equal(contentBlocks(weekly)[0].uuid, summaryId);
+  assert.equal(namedCalls(f, "createPage").filter((call) => call[2] === weekly.name).length, 1);
+  assert.equal(exampleRecord(f), undefined, "existing definitions are not automatically seeded");
+});
+
+test("retry cannot confirm initialization after a verified snapshot summary is deleted", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  await f.runtime.configure({ autoOpen: false }, first.graphKey);
+  for (const [index, name] of Object.values(first.definitions).entries()) {
+    f.pages().set(name, { id: index + 1, uuid: uuid(index + 1), name, properties: {}, format: "markdown", blocks: [] });
+  }
+  const save = f.storage.set;
+  f.storage.set = async (key, value) => {
+    if (key === initializationKey(first.graphKey) && value.state === "verified") throw new Error("completion save failed");
+    return save(key, value);
+  };
+  await assert.rejects(f.runtime.enable(first.graphKey), /completion save failed/);
+  f.storage.set = save;
+  const weekly = f.pages().get(currentPeriods(f).weekly.pageName);
+  weekly.blocks.splice(1);
+  const before = clone([...f.pages()]);
+  const effects = clone(graphEffects(f));
+  await assert.rejects(f.runtime.enable(first.graphKey), /summary block could not be verified/);
+  assert.equal(f.runtime.getStatus().initialization, "pending");
+  assert.equal(f.records.get(initializationKey(first.graphKey)).state, "pending");
+  assert.deepEqual([...f.pages()], before);
+  assert.deepEqual(graphEffects(f), effects);
+});
+
 test("previously saved alpha settings do not trigger a new welcome", async (t) => {
   const f = fixture(); t.after(() => f.runtime.destroy());
   await f.runtime.start();
@@ -266,10 +619,26 @@ test("first Enable seeds both new default definitions and current localized Greg
   const selected = currentPeriods(f);
   assert.equal((await f.runtime.start()).enabled, false);
   assert.equal(namedCalls(f, "createPage").length, 0);
+  const save = f.storage.set;
+  let verified = false;
+  f.storage.set = async (key, value) => {
+    if (key === initializationKey(f.runtime.getStatus().graphKey) && value.state === "verified") {
+      verified = true;
+      assert.equal(value.phase, "examples");
+      assert.equal(exampleRecord(f).completed, true, "example verification precedes initialization completion");
+      for (const kind of ["weekly", "monthly"]) {
+        assert.equal(contentBlocks(f.pages().get(selected[kind].pageName))[0].children.length, 2);
+        assert.equal(contentBlocks(f.pages().get(value.definitions[kind])).length, 2);
+      }
+    }
+    return save(key, value);
+  };
   const state = await f.runtime.enable();
+  assert.equal(verified, true);
+  assert.equal(state.initialization, "verified");
+  assert.equal(state.enabled, true);
   assert.equal(state.onboarding, "completed");
   assert.equal((await f.runtime.refreshStatus()).onboarding, "completed");
-  assert.equal(state.enabled, true);
   assert.equal(f.pages().size, 4);
   assert.equal(selected.weekly.pageName, "Week · Mar 16–Mar 22 — 2026-03-16");
   assert.equal(selected.monthly.pageName, "March 2026 — 2026-03-01");
@@ -287,7 +656,11 @@ test("first Enable seeds both new default definitions and current localized Greg
   assert.ok(namedCalls(f, "createPage").filter((call) => Object.values(selected).some((period) => period.pageName === call[2]))
     .every((call) => call[3] === null), "Period creation must not pass a properties map");
   assert.equal(namedCalls(f, "updateBlock").length, 2);
-  assert.equal(namedCalls(f, "checkEditing").length, 2);
+  assert.equal(namedCalls(f, "checkEditing").length, 4, "definitions and period bootstraps are guarded");
+  for (const kind of ["weekly", "monthly"]) {
+    assert.deepEqual(f.pages().get(state.definitions[kind]).properties, {}, "definitions gain no metadata");
+    assert.equal(headerOf(f.pages().get(state.definitions[kind])), undefined, "definitions gain no bootstrap header");
+  }
   assert.equal(headerOf(f.pages().get(selected.weekly.pageName)).properties["jr-snapshot-state"], "populated");
   assert.equal(f.pages().get(selected.weekly.pageName).properties["jr-snapshot-state"], "ready:0", "page mutable state stays stale");
   const sidebar = namedCalls(f, "sidebar");
@@ -378,6 +751,65 @@ test("calendar switch cancel and unavailable dependency preserve settings and pa
   assert.equal(f.pages().size, 4);
 });
 
+test("autoOpen false verifies fresh setup and reload without writes or panes; explicit Show navigates", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  await f.runtime.configure({ autoOpen: false }, first.graphKey);
+  const enabled = await f.runtime.enable(first.graphKey);
+  assert.equal(enabled.initialization, "verified");
+  assert.equal(enabled.onboarding, "completed");
+  assert.equal(exampleRecord(f).completed, true);
+  assert.equal(namedCalls(f, "sidebar").length, 0);
+  const weekly = f.pages().get(currentPeriods(f).weekly.pageName);
+  contentBlocks(weekly)[0].children[0].content = "DONE preserved after reload";
+  const before = clone([...f.pages()]);
+  const records = clone([...f.records]);
+  const effects = clone(graphEffects(f));
+  await f.runtime.destroy();
+  const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+  const status = await reloaded.start();
+  assert.equal(status.initialization, "verified");
+  assert.equal(status.autoOpen, false);
+  assert.equal(status.error, null);
+  await reloaded.refreshStatus();
+  assert.deepEqual([...f.records], records);
+  assert.deepEqual([...f.pages()], before);
+  assert.deepEqual(graphEffects(f), effects);
+  await reloaded.showCurrent();
+  assert.equal(namedCalls(f, "sidebar").length, 2);
+  assert.deepEqual([...f.pages()], before);
+  assert.deepEqual(graphEffects(f).filter((call) => call[0] !== "sidebar"), effects);
+});
+
+test("saved enabled graph settings reload without initialization migration or content edits", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  await enableEmpty(f);
+  const graphKey = f.runtime.getStatus().graphKey;
+  await f.runtime.configure({ autoOpen: false }, graphKey);
+  const settingsKey = [...f.records.keys()].find((key) => key.includes("routines:v1:"));
+  delete f.records.get(settingsKey).onboarding;
+  f.records.delete(initializationKey(graphKey));
+  const weekly = f.pages().get(currentPeriods(f).weekly.pageName);
+  contentBlocks(weekly)[0].content = "User-owned edited summary";
+  const before = clone([...f.pages()]);
+  const records = clone([...f.records]);
+  const effects = clone(graphEffects(f));
+  const saves = namedCalls(f, "storage.set").length;
+  await f.runtime.destroy();
+  const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+  const status = await reloaded.start();
+  assert.equal(status.enabled, true);
+  assert.equal(status.onboarding, "completed");
+  assert.equal(status.initialization, null);
+  assert.equal(status.error, null);
+  await reloaded.refreshStatus();
+  await reloaded.enable(graphKey);
+  assert.deepEqual([...f.records], records);
+  assert.equal(namedCalls(f, "storage.set").length, saves);
+  assert.deepEqual([...f.pages()], before);
+  assert.deepEqual(graphEffects(f), effects);
+});
+
 test("auto-open suppression, on-demand history, definition selection and no idle queries", async (t) => {
   const f = fixture(); t.after(() => f.runtime.destroy());
   await f.runtime.start();
@@ -441,8 +873,13 @@ test("a marker written before ambiguous creation prevents repeated automatic cre
   const name = currentPeriods(f).weekly.pageName;
   assert.ok(f.pages().has(name));
   f.pages().delete(name);
-  await assert.rejects(f.runtime.showCurrent(), /Previously attempted period is unavailable/);
+  const effects = clone(graphEffects(f));
+  await assert.rejects(f.runtime.showCurrent(), /initialization is unfinished/i);
   assert.equal(f.pages().has(name), false);
+  assert.deepEqual(graphEffects(f), effects);
+  await assert.rejects(f.runtime.enable(), /Previously attempted period is unavailable/);
+  assert.equal(f.pages().has(name), false);
+  assert.deepEqual(graphEffects(f), effects);
 });
 
 test("an emptied graph path retains activation and creation evidence without claiming proven deletion", async (t) => {
@@ -1056,6 +1493,7 @@ test("both snapshot versions persist example intent and summary view ID before t
         const key = [...f.records.keys()].find((item) => item.startsWith("journal-routines:examples:v1:"));
         const marker = f.records.get(key);
         assert.deepEqual(marker.attempted, [1, 0, 0, 0]);
+        assert.equal(marker.completed, false);
         assert.equal(marker.pages[0].viewBlockId, version === 1 ? args[2].customUUID :
           contentBlocks(f.pages().get(currentPeriods(f).weekly.pageName))[0].uuid);
       }
@@ -1063,6 +1501,7 @@ test("both snapshot versions persist example intent and summary view ID before t
     };
     assert.equal((await f.runtime.addExamples(f.runtime.getStatus().graphKey)).inserted, version === 1 ? 10 : 8);
     assert.equal(observed, true);
+    assert.equal(exampleRecord(f).completed, true);
   }
 });
 

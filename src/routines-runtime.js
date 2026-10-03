@@ -6,10 +6,12 @@ import { ensureRoutineHistory } from "./routine-history.js";
 import { installDailyJournalTemplate, syncDailyTemplateContext } from "./daily-template.js";
 import { applyDailyTemplateToToday } from "./daily-today.js";
 import { DAILY_PRESENTATION_STYLE } from "./daily-presentation.js";
+import { createPageWithTextProperties } from "./page-metadata.js";
 
 const SETTINGS = "journal-routines:routines:v1:";
 const SEEN = "journal-routines:period-seen:v1:";
 const EXAMPLE_SEEN = "journal-routines:examples:v1:";
+const INITIALIZATION = "journal-routines:initialization:v1:";
 const KINDS = ["weekly", "monthly"];
 const PERSIAN_MONTHS = Object.freeze(["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
   "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]);
@@ -17,7 +19,7 @@ const DEFAULT_DEFINITIONS = Object.freeze({
   weekly: "Journal & Routines — Weekly definition",
   monthly: "Journal & Routines — Monthly definition",
 });
-const PAGE_OPTIONS = { redirect: false, createFirstBlock: false, format: "markdown" };
+
 // Logseq needs a nonempty parent block to open only the editable task subtree,
 // without rendering the page-properties pre-block. The zero-width anchor has no heading text.
 const SUMMARY_ANCHOR = "\u200B";
@@ -182,7 +184,18 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
         currentIds = null;
         lastDay = null;
       }
-      context = { key: ticket.key, name: identity.name, settings };
+      const initialization = await checked(ticket, () => storage.get(INITIALIZATION + ticket.key));
+      if (initialization !== null && (initialization?.version !== 1 ||
+          !["pending", "verified"].includes(initialization.state) ||
+          !["definitions", "periods", "examples"].includes(initialization.phase) ||
+          !["gregorian", "jalali"].includes(initialization.calendar) ||
+          typeof initialization.seedExamples !== "boolean" ||
+          !initialization.definitions || !initialization.periods ||
+          KINDS.some((kind) => typeof initialization.definitions[kind] !== "string" ||
+            typeof initialization.periods[kind] !== "string"))) {
+        throw new Error("Invalid routine initialization record; inspect setup before continuing.");
+      }
+      context = { key: ticket.key, name: identity.name, settings, initialization };
       if (!active()) clearSchedule();
     } else context.name = identity.name;
     return context;
@@ -197,7 +210,11 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
             onboarding: context?.settings.onboarding ?? null,
       autoOpen: context?.settings.autoOpen ?? null,
       definitions: context ? { ...context.settings.definitions } : null,
-      paused: !!context?.settings.enabled && stopped.has(context.key), error: lastError, dailyTemplateWarning };
+      initialization: context?.initialization?.state ?? null,
+      paused: !!context?.settings.enabled && stopped.has(context.key),
+      error: lastError ?? (context?.initialization?.state === "pending"
+        ? "Routine initialization is unfinished. Open Setup and explicitly retry; ambiguous writes will remain paused for inspection." : null),
+      dailyTemplateWarning };
   }
   function refreshStatus() {
     return enqueue(async (ticket) => {
@@ -367,14 +384,34 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       dailyTemplateWarning = `Daily template context is unavailable; its task views may be outdated. ${error.message} Finish editing or inspect the template, then retry Install daily journal template. Routine settings are saved independently.`;
     }
   }
-  async function runCurrent(ticket, force = false, skipOpen = false) {
+  async function saveInitialization(ctx, record, ticket) {
+    await checked(ticket, () => storage.set(INITIALIZATION + ctx.key, record));
+    const saved = await checked(ticket, () => storage.get(INITIALIZATION + ctx.key));
+    if (JSON.stringify(saved) !== JSON.stringify(record)) throw new Error("Routine initialization record could not be verified.");
+    ctx.initialization = record;
+  }
+  async function runCurrent(ticket, force = false, skipOpen = false, initializing = false, expectedPeriods = null) {
     const ctx = await identityContext(ticket);
     if (!active(ctx)) return getStatus();
+    if (!initializing && ctx.initialization?.state === "pending") {
+      throw new Error("Routine initialization is unfinished. Open Setup and explicitly retry; no automatic starter writes or sidebar opening were attempted.");
+    }
     try {
       const date = now(), day = localCivilDate(date);
       if (!force && lastDay === day) return getStatus();
-      await syncOptionalDailyTemplate(ctx, ticket);
       const selected = await periods(ctx.settings.calendar, ticket, date);
+      if (expectedPeriods && KINDS.some((kind) => expectedPeriods[kind] !== selected[kind].id)) {
+        throw new Error("Current periods changed during initialization. Inspect the original attempt; no different periods were initialized.");
+      }
+      await syncOptionalDailyTemplate(ctx, ticket);
+      if (!initializing) {
+        const examples = await checked(ticket, () => storage.get(`${EXAMPLE_SEEN}${ctx.key}:${selected.weekly.id}:${selected.monthly.id}`), true);
+        if (examples?.completed === false || (examples && (!Array.isArray(examples.pages) ||
+            !Array.isArray(examples.attempted) || examples.pages.some((page, index) =>
+              !Array.isArray(page.ids) || examples.attempted[index] !== page.ids.length)))) {
+          throw new Error("Routine examples have an unfinished or ambiguous write. Inspect the original pages, then use More options → Add two Persian examples per routine to explicitly verify the attempt; no automatic refill or sidebar opening was attempted.");
+        }
+      }
       await guard(ticket, true);
       const ids = KINDS.map((kind) => selected[kind].id);
       if (!force && currentIds?.every((id, i) => id === ids[i])) {
@@ -383,6 +420,9 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       }
       const entries = [];
       for (const kind of KINDS) entries.push(await ensurePeriod(ctx, selected[kind], ticket));
+      if ((initializing || skipOpen) && entries.some((entry) => entry.viewUnavailable)) {
+        throw new Error("Routine summary block could not be verified; inspect the original period page. Initialization was not confirmed and no content was rebuilt.");
+      }
       if (entries.some((entry) => !entry.viewBlockId)) {
         // A manually seeded v1 page has a summary outside its older creation plan.
         // Only the exact graph-local write marker can identify that summary; missing
@@ -397,6 +437,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
           }
         }
       }
+      if (initializing && localCivilDate(now()) !== day) throw new Error("Current day changed during initialization; verification remains unfinished.");
       if (!skipOpen && (force || ctx.settings.autoOpen)) await openPages(entries, ticket, force);
       currentIds = ids;
       lastDay = day;
@@ -476,6 +517,9 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
         definitions: { ...ctx.settings.definitions, ...requested.definitions } });
       const changedCalendar = settings.calendar !== ctx.settings.calendar;
       const changedDefinitions = KINDS.some((kind) => settings.definitions[kind] !== ctx.settings.definitions[kind]);
+      if (ctx.initialization?.state === "pending" && (changedCalendar || changedDefinitions)) {
+        throw new Error("Routine initialization is unfinished; inspect or retry it before changing calendar or definition pages.");
+      }
       if (changedDefinitions && ctx.settings.enabled) throw new Error("Disable before selecting a different definition page; old snapshots stay unchanged.");
       if (changedCalendar && confirmCalendarChange !== true) throw new Error("Calendar switch requires explicit UI confirmation; no setting was changed.");
       if (changedCalendar && settings.calendar === "jalali") await periods(settings.calendar, ticket);
@@ -497,45 +541,81 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
     return enqueue(async (ticket) => {
       const ctx = await identityContext(ticket);
       const selected = await periods(ctx.settings.calendar, ticket);
-      let freshDefaults = !active(ctx) && KINDS.every((kind) => ctx.settings.definitions[kind] === DEFAULT_DEFINITIONS[kind]);
-      if (!active(ctx)) {
-        for (const kind of KINDS) {
-          const name = ctx.settings.definitions[kind];
-          let page = await checked(ticket, () => sdk.Editor.getPage(name));
+      let attempt = ctx.initialization?.state === "pending" ? ctx.initialization : null;
+      if (attempt) {
+        if (attempt.calendar !== ctx.settings.calendar || KINDS.some((kind) =>
+            attempt.definitions[kind] !== ctx.settings.definitions[kind] || attempt.periods[kind] !== selected[kind].id)) {
+          throw new Error("Unfinished initialization belongs to different settings or periods. Inspect the original routine pages; no new setup was started.");
+        }
+        if (attempt.phase === "definitions") {
+          throw new Error("Definition creation outcome is ambiguous. Inspect the definition pages; setup will not adopt or recreate an interrupted definition write.");
+        }
+        for (const name of Object.values(attempt.definitions)) {
+          const page = await checked(ticket, () => sdk.Editor.getPage(name));
           definitionPage(page, name);
-          if (page !== null) freshDefaults = false;
-          if (page === null) {
-            let created;
-            try { created = await checked(ticket, () => sdk.Editor.createPage(name, null, PAGE_OPTIONS)); }
-            catch (error) { throw new Error(`Definition creation outcome is ambiguous for ${name}: ${error.message}`); }
-            page = await checked(ticket, () => sdk.Editor.getPage(name));
-            if (!page || !created || !Number.isSafeInteger(page.id) || page.id <= 0 ||
-              page.uuid !== created.uuid || page.id !== created.id) throw new Error(`Cannot verify definition page: ${name}`);
-            definitionPage(page, name);
+          if (!page || !UUID.test(page.uuid) || !Number.isSafeInteger(page.id) || page.id <= 0) {
+            throw new Error(`Previously initialized definition is unavailable: ${name}. Inspect the page; no automatic recreation was attempted.`);
           }
         }
-        if (freshDefaults) {
+      } else if (!active(ctx)) {
+        const existing = {};
+        for (const kind of KINDS) {
+          const name = ctx.settings.definitions[kind];
+          existing[kind] = await checked(ticket, () => sdk.Editor.getPage(name));
+          definitionPage(existing[kind], name);
+        }
+        let seedExamples = KINDS.every((kind) => existing[kind] === null && ctx.settings.definitions[kind] === DEFAULT_DEFINITIONS[kind]);
+        if (seedExamples) {
           for (const kind of KINDS) {
             const period = selected[kind];
             const legacy = makePeriod({ calendar: period.calendar, kind, start: period.start, end: period.end });
-            const marker = await checked(ticket, () => storage.get(`${SEEN}${ctx.key}:${period.id}`));
-            if (marker !== null) freshDefaults = false;
+            if (await checked(ticket, () => storage.get(`${SEEN}${ctx.key}:${period.id}`)) !== null) seedExamples = false;
             for (const name of new Set([period.pageName, legacy.pageName])) {
               const page = await checked(ticket, () => sdk.Editor.getPage(name));
               if (page === undefined) throw new Error(`Period lookup is ambiguous: ${name}`);
-              if (page !== null) freshDefaults = false;
+              if (page !== null) seedExamples = false;
             }
           }
         }
+        attempt = { version: 1, state: "pending", phase: "definitions", seedExamples,
+          calendar: ctx.settings.calendar, definitions: { ...ctx.settings.definitions },
+          periods: Object.fromEntries(KINDS.map((kind) => [kind, selected[kind].id])) };
+        await saveInitialization(ctx, attempt, ticket);
+        for (const kind of KINDS) {
+          if (existing[kind] !== null) continue;
+          const name = ctx.settings.definitions[kind];
+          try {
+            const page = await createPageWithTextProperties({ editor: sdk.Editor, name,
+              properties: {}, guard: () => guard(ticket) });
+            definitionPage(page, name);
+          } catch (error) { throw new Error(`Definition creation outcome is ambiguous for ${name}: ${error.message}`); }
+        }
+        attempt = { ...attempt, phase: "periods" };
+        await saveInitialization(ctx, attempt, ticket);
+      }
+      if (!active(ctx)) {
         await save(ctx, { ...ctx.settings, enabled: true }, ticket);
         stopped.delete(ctx.key);
       }
-      if (freshDefaults) {
-        await runCurrent(ticket, false, true);
-        await insertExamples(ticket);
-        await runCurrent(ticket, true);
-      } else await runCurrent(ticket);
+      if (attempt) {
+        // Verification is not navigation: bypass caches but leave panes untouched.
+        await runCurrent(ticket, true, true, true, attempt.periods);
+        if (attempt.seedExamples) {
+          attempt = { ...attempt, phase: "examples" };
+          await saveInitialization(ctx, attempt, ticket);
+          await insertExamples(ticket, attempt.periods);
+        }
+        await runCurrent(ticket, true, true, true, attempt.periods);
+        await saveInitialization(ctx, { ...attempt, state: "verified" }, ticket);
+      } else await runCurrent(ticket, true, true);
       if (ctx.settings.onboarding !== "completed") await save(ctx, { ...ctx.settings, onboarding: "completed" }, ticket);
+      // Only the explicit Show action forces opening. Initialization honors autoOpen
+      // and retains session tracking of panes the user manually closed.
+      if (ctx.settings.autoOpen) {
+        currentIds = null;
+        lastDay = null;
+        await runCurrent(ticket);
+      }
       return getStatus();
     }, expectedGraphKey);
   }
@@ -556,7 +636,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
   }
   // Default starter definitions are seeded once on first Enable. The same
   // preflighted operation remains available explicitly for older empty periods.
-  async function insertExamples(ticket) {
+  async function insertExamples(ticket, expectedPeriods = null) {
       const ctx = await identityContext(ticket);
       if (!active(ctx)) throw new Error("Enable routines for this graph before adding examples.");
       if (typeof sdk.Editor.getPageBlocksTree !== "function" || typeof sdk.Editor.getBlock !== "function" ||
@@ -565,6 +645,9 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       }
       const day = localCivilDate(now());
       const current = await periods(ctx.settings.calendar, ticket);
+      if (expectedPeriods && KINDS.some((kind) => expectedPeriods[kind] !== current[kind].id)) {
+        throw new Error("Current periods changed during initialization. Inspect the original attempt; no different periods were seeded.");
+      }
       const selected = {};
       for (const kind of KINDS) selected[kind] = (await ensurePeriod(ctx, current[kind], ticket)).period;
       const resources = EXAMPLE_RESOURCES.map(([kind, type]) => ({ kind, type,
@@ -783,7 +866,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
         // Existing exact-looking blocks without the marker are NOT evidence that
         // this action wrote them. Never adopt them or create more alongside them.
         if (states.some(({ written }) => written)) throw new Error("Unrecognized existing examples; no blocks were written.");
-        marker = { version: 1, pages, attempted: [0, 0, 0, 0] };
+        marker = { version: 1, pages, attempted: [0, 0, 0, 0], completed: false };
         await checked(ticket, () => storage.set(markerKey, marker), true);
       } else {
         marker = saved;
@@ -834,6 +917,14 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
           if (states[r].written !== i + 1) throw new Error("Example insert could not be verified; inspect the page before retrying.");
           inserted++;
         }
+      }
+      states = await preflight();
+      await verifyMarker();
+      if (states.some((state) => state.written !== state.ids.length)) throw new Error("Routine examples are not fully verified; inspect the pages before continuing.");
+      marker = { ...marker, completed: true };
+      await checked(ticket, () => storage.set(markerKey, marker), true);
+      if (JSON.stringify(await checked(ticket, () => storage.get(markerKey), true)) !== JSON.stringify(marker)) {
+        throw new Error("Routine example completion could not be verified.");
       }
       return { graphKey: ticket.key, inserted, viewBlockIds: {
         weekly: pages[0].viewBlockId, monthly: pages[1].viewBlockId,

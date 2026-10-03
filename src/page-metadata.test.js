@@ -89,6 +89,67 @@ for (const flag of ["preBlock", "preBlock?", "pre-block?", "block/pre-block?"]) 
     assert.equal(page.properties.jrKind, "weekly");
   });
 }
+for (const title of [false, true]) for (const tuples of [false, true]) {
+  test(`property-free creation verifies without bootstrap or metadata: title=${title}, tuples=${tuples}`, async () => {
+    const f = fixture({ title, tuples });
+    for (const method of ["newBlockUUID", "insertBlock", "updateBlock"]) delete f.editor[method];
+    const page = await f.run({ properties: {} });
+    assert.deepEqual(page.properties, {});
+    assert.deepEqual(f.root, title ? {
+      id: 2, uuid: uuid(2), content: `title:: ${name}`, properties: { title: name }, preBlock: true,
+      format: "markdown", page: { id: 1 }, parent: { id: 1 }, left: { id: 1 }, children: [],
+    } : null);
+    assert.deepEqual(f.writes().map(({ method }) => method), ["createPage"]);
+    assert.equal(f.guards, f.calls.length * 2);
+  });
+}
+for (const bad of [null, undefined, {}, { id: 1, uuid: uuid(9), name }, { id: 1, uuid: uuid(1), name: "Other" }]) {
+  test(`property-free creation refuses ambiguous acknowledgement: ${JSON.stringify(bad)}`, async () => {
+    const f = fixture(); f.after.createPage = () => bad;
+    await assert.rejects(f.run({ properties: {} }), /paused/);
+    assert.equal(f.writes().length, 1);
+  });
+}
+for (const mutation of [
+  (f) => { f.page.properties.tags = "mine"; },
+  (f) => { f.page.format = "org"; },
+  (f) => { f.page["journal?"] = true; },
+  (f) => { f.root.content += "\nMy note"; },
+  (f) => { f.root.properties.tags = "mine"; },
+  (f) => { f.root.parent.id = 99; },
+]) {
+  test(`property-free creation preserves unexpected page/header content: ${mutation}`, async () => {
+    const f = fixture({ title: true });
+    f.after.createPage = (ack) => { mutation(f); return ack; };
+    await assert.rejects(f.run({ properties: {} }), /paused/);
+    assert.equal(f.writes().length, 1);
+  });
+}
+test("property-free creation refuses a new root arriving during verification", async () => {
+  const f = fixture(); let reads = 0;
+  f.before.getPageBlocksTree = () => {
+    if (++reads === 2) f.root = { id: 2, uuid: uuid(2), content: "User note", properties: {},
+      preBlock: false, page: { id: 1 }, parent: { id: 1 }, left: { id: 1 }, children: [] };
+  };
+  await assert.rejects(f.run({ properties: {} }), /edited/);
+  assert.equal(f.root.content, "User note");
+  assert.equal(f.writes().length, 1);
+});
+for (const method of ["createPage", "getPageBlocksTree", "getBlock", "checkEditing"]) {
+  test(`property-free graph guard stops immediately after ${method}`, async () => {
+    const f = fixture({ title: true });
+    f.after[method] = (result) => { f.stale = true; return result; };
+    await assert.rejects(f.run({ properties: {} }), /graph changed/);
+    assert.equal(f.calls.at(-1).method, method);
+  });
+}
+test("property-free creation refuses existing pages without writes", async () => {
+  const f = fixture();
+  await f.run({ properties: {} });
+  await assert.rejects(f.run({ properties: {} }), /already exists/);
+  assert.equal(f.writes().length, 1);
+});
+
 test("bootstrap without an SDK-appended id is supported", async () => {
   const f = fixture({ id: false });
   assert.deepEqual((await f.run()).properties, metadata);
@@ -267,7 +328,7 @@ test("ambiguous absence is not permission to create", async () => {
 });
 for (const properties of [{ "Jr-kind": "weekly" }, { "jr-kind": "weekly\nextra:: yes" }, { "jr-kind": [] },
   { "jr-kind": { nested: "x" } }, { "jr-kind": "weekly\rtitle:: no" }, { title: "x" }, { id: uuid(1) },
-  { "jr-kind": "x\u2028y" }, { "jr-kind": " x " }, {}]) {
+  { "jr-kind": "x\u2028y" }, { "jr-kind": " x " }, null, undefined]) {
   test(`invalid flat metadata rejects before SDK calls: ${JSON.stringify(properties)}`, async () => {
     const f = fixture(); await assert.rejects(f.run({ properties }), TypeError); assert.equal(f.calls.length, 0);
   });

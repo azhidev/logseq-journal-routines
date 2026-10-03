@@ -68,7 +68,7 @@ function textProperties(content) {
 // Existing pages (including interrupted bootstraps) are never adopted or repaired here.
 export async function createPageWithTextProperties({ editor, name, properties, guard, reservedIds = [] }) {
   if (!singleLine(name) || typeof guard !== "function" || !plain(properties) ||
-      !Object.keys(properties).length || !Array.isArray(reservedIds) || reservedIds.some((id) => !UUID.test(id))) {
+      !Array.isArray(reservedIds) || reservedIds.some((id) => !UUID.test(id))) {
     throw new TypeError("Expected a page name, flat metadata, graph guard and reserved UUID array.");
   }
   const managed = Object.fromEntries(Object.entries(properties));
@@ -79,7 +79,10 @@ export async function createPageWithTextProperties({ editor, name, properties, g
   }
   const keys = [...Object.keys(managed), "title", "id"];
   if (new Set(keys.map(camel)).size !== keys.length) throw new TypeError("Ambiguous metadata aliases.");
-  for (const method of ["getPage", "createPage", "getPageBlocksTree", "getBlock", "newBlockUUID", "insertBlock", "updateBlock", "checkEditing"]) {
+  const hasMetadata = Object.keys(managed).length > 0;
+  const methods = ["getPage", "createPage", "getPageBlocksTree", "getBlock", "checkEditing"];
+  if (hasMetadata) methods.push("newBlockUUID", "insertBlock", "updateBlock");
+  for (const method of methods) {
     if (typeof editor?.[method] !== "function") throw new TypeError(`Editor.${method} is required for safe metadata creation.`);
   }
   const reserved = new Set(reservedIds.map((id) => id.toLowerCase()));
@@ -90,6 +93,9 @@ export async function createPageWithTextProperties({ editor, name, properties, g
   }
   function pageIdentity(page) {
     const result = identity(page, "Page");
+    if (page["journal?"] === true || page.isJournal === true || (page.format != null && page.format !== "markdown")) {
+      fail("Page is not an ordinary Markdown page.");
+    }
     if (typeof page.name !== "string" || page.name.toLowerCase() !== name.toLowerCase() || reserved.has(page.uuid.toLowerCase())) {
       fail("Page name or reserved identity collision.");
     }
@@ -149,7 +155,7 @@ export async function createPageWithTextProperties({ editor, name, properties, g
     for (const [key, value] of Object.entries(initialPageProperties)) {
       if (original[key] !== value) fail("Native title header and page properties disagree.");
     }
-  } else {
+  } else if (hasMetadata) {
     equalProperties(initialPageProperties, {});
     const uuid = await call("newBlockUUID");
     if (!UUID.test(uuid) || reserved.has(uuid.toLowerCase()) || uuid.toLowerCase() === page.uuid.toLowerCase()) fail("Fresh bootstrap UUID collision or malformed UUID.");
@@ -166,15 +172,18 @@ export async function createPageWithTextProperties({ editor, name, properties, g
     const expected = BOOTSTRAP + (Object.hasOwn(original, "id") ? `\nid:: ${original.id}` : "");
     if (root.content !== expected) fail("Bootstrap text was edited.");
   }
-  const before = snapshot(root);
+  if (!root) equalProperties(initialPageProperties, {});
+  const before = root ? snapshot(root) : null;
   const latestPage = await call("getPage", name);
   if (pageIdentity(latestPage) !== pageKey) fail("Page identity changed before metadata write.");
   equalProperties(propertiesOf(latestPage, keys), initialPageProperties);
   const latestRoot = await readRoot();
-  if (!latestRoot || snapshot(latestRoot) !== before) fail("Header was edited before metadata write.");
+  if ((latestRoot ? snapshot(latestRoot) : null) !== before) fail("Header was edited before metadata write.");
   const editing = await call("checkEditing");
   if (editing !== false && editing !== null && (typeof editing !== "string" || !UUID.test(editing))) fail("Editing status is ambiguous.");
-  if (typeof editing === "string" && [root.uuid, page.uuid].some((uuid) => uuid.toLowerCase() === editing.toLowerCase())) fail("Target header/page is currently being edited.");
+  if (typeof editing === "string" && [root?.uuid, page.uuid].filter(Boolean).some((uuid) => uuid.toLowerCase() === editing.toLowerCase())) fail("Target header/page is currently being edited.");
+  // Ordinary definitions need no bootstrap, ownership properties or title mirroring.
+  if (!hasMetadata) return latestPage;
   // Preserve native title text/order verbatim; customUUID may have appended an id line.
   const prefix = original.title ? root.content : (original.id ? `id:: ${original.id}` : "");
   const text = [prefix, ...Object.entries(managed).map(([key, value]) => `${key}:: ${value}`)].filter(Boolean).join("\n");
