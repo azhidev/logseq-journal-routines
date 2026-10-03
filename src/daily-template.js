@@ -142,6 +142,25 @@ async function contextProperties(sdk, checked, settings) {
   }
   return result;
 }
+function contextLineIndices(lines, key, current) {
+  const indices = [];
+  let fence = null;
+  for (const [index, line] of lines.entries()) {
+    if (fence) {
+      const closing = /^\s*(`+|~+)\s*$/.exec(line);
+      if (closing && closing[1][0] === fence[0] && closing[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const opening = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (opening) { fence = opening[1]; continue; }
+    const property = /^([^\s:]+)::(.*)\r?$/.exec(line);
+    if (property?.[1] !== key) continue;
+    // SDK metadata alone does not authorize rewriting a lookalike text line.
+    if (property[2].trim() !== current) throw new Error("Daily template context property text disagrees with its metadata; inspect its root.");
+    indices.push(index);
+  }
+  return indices;
+}
 function rootContent(properties) {
   return ["Daily journal template", `template:: ${DAILY_TEMPLATE}`, "template-including-parent:: false",
     ...Object.entries(properties).map(([key, value]) => `${key}:: ${value}`)].join("\n");
@@ -186,9 +205,9 @@ export async function syncDailyTemplateContext({ sdk, storage, graphKey, guard, 
   if (typeof root.content !== "string") throw new Error("Daily template root text is unavailable.");
   const lines = root.content.split("\n");
   for (const [key, value] of Object.entries(desired)) {
-    const indices = lines.map((line, index) => /^([^\s:]+)::/.exec(line)?.[1] === key ? index : -1).filter((index) => index >= 0);
+    const indices = contextLineIndices(lines, key, prop(root, key));
     if (indices.length !== 1) throw new Error("Daily template context property text is missing or duplicated; inspect its root.");
-    lines[indices[0]] = `${key}:: ${value}`;
+    lines[indices[0]] = `${key}:: ${value}${lines[indices[0]].endsWith("\r") ? "\r" : ""}`;
   }
   const fresh = await checked(() => sdk.Editor.getBlock(root.uuid));
   if (fresh?.content !== root.content || await checked(() => sdk.Editor.checkEditing()) === root.uuid) throw new Error("Daily template root changed or is being edited; no context write.");

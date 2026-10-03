@@ -19,9 +19,16 @@ function fixture() {
   }
   function entity() { if (!page) return null; const { blocks, ...rest } = page; return clone(rest); }
   function parsed(content) {
+    let fence = null;
     return Object.fromEntries(content.split("\n").flatMap((line) => {
-      const match = /^([a-z][a-z-]*):: (.*)$/.exec(line);
-      return match ? [[match[1], match[2]]] : [];
+      if (fence) {
+        if (new RegExp(`^\\s*${fence[0]}{${fence.length},}\\s*$`).test(line)) fence = null;
+        return [];
+      }
+      const opening = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (opening) { fence = opening[1]; return []; }
+      const match = /^([a-z][a-z-]*):: (.*)\r?$/.exec(line);
+      return match ? [[match[1], match[2].trim()]] : [];
     }));
   }
   const editor = {
@@ -186,6 +193,78 @@ test("context follows calendar and definition changes, without rewriting templat
   assert.deepEqual(root.children, sections);
   const writes = f.calls.length;
   await f.sync({ calendar: "jalali", definitions: { weekly: "My Weekly", monthly: "My Monthly" } });
+  assert.equal(f.calls.length, writes);
+});
+
+test("context updates preserve fenced metadata examples and user descendants in one text save", async () => {
+  for (const [opening, closing] of [["```markdown", "```"], ["~~~~text", "~~~~~"], ["  ```", "  ```"], ["````", "````"], ["~~~", ""]]) {
+    const f = fixture(); await f.install();
+    const root = f.page().blocks[1];
+    const example = ["User example", opening, "jr-daily-calendar:: gregorian",
+      `jr-weekly-definition:: page-uuid:${uuid(1)}`, `jr-monthly-definition:: page-uuid:${uuid(2)}`,
+      opening.trim().startsWith("~") ? "```" : opening.trim().startsWith("````") ? "```" : "~~~",
+      "jr-daily-calendar:: example after a non-closing fence", closing].join("\n");
+    root.content += `\n${example}`;
+    root.children[0].children[0].content = "My user note\njr-daily-calendar:: not metadata";
+    const descendants = clone(root.children), before = root.content, writes = f.calls.length;
+    const next = { calendar: "jalali", definitions: { weekly: "My Weekly", monthly: "My Monthly" } };
+    await f.sync(next);
+    const expected = before.replace("jr-daily-calendar:: gregorian", "jr-daily-calendar:: jalali")
+      .replace(`jr-weekly-definition:: page-uuid:${uuid(1)}`, `jr-weekly-definition:: page-uuid:${uuid(3)}`)
+      .replace(`jr-monthly-definition:: page-uuid:${uuid(2)}`, `jr-monthly-definition:: page-uuid:${uuid(4)}`);
+    assert.equal(root.content, expected);
+    assert.deepEqual(root.children, descendants);
+    assert.deepEqual(f.calls.slice(writes).map(([kind]) => kind), ["update"]);
+    const saved = f.calls.length;
+    await f.sync(next); assert.equal(f.calls.length, saved, "unchanged context remains write-free");
+  }
+});
+
+test("context refuses fenced-only, mismatched or duplicated property text without changing user content", async () => {
+  for (const newline of ["\n", "\r\n"]) for (const mode of ["fenced-only", "mismatch", "duplicate"]) {
+    const f = fixture(); await f.install(); const root = f.page().blocks[1];
+    const line = "jr-daily-calendar:: gregorian";
+    if (mode === "fenced-only") root.content = root.content.replace(line, "") + `\n\`\`\`markdown\n${line}\n\`\`\``;
+    if (mode === "mismatch") root.content = root.content.replace(line, "jr-daily-calendar:: user example");
+    if (mode === "duplicate") root.content += `\n${line}`;
+    root.content = root.content.replaceAll("\n", newline);
+    // Model stale/indexed SDK properties: text must independently authorize the save.
+    const before = clone(f.page()), writes = f.calls.length;
+    await assert.rejects(f.sync({ ...settings, calendar: "jalali" }), /context property text/);
+    assert.deepEqual(f.page(), before); assert.equal(f.calls.length, writes);
+  }
+});
+
+test("context updates preserve CRLF, quoted and indented property examples", async () => {
+  const f = fixture(); await f.install(); const root = f.page().blocks[1];
+  const notes = "> jr-daily-calendar:: quoted\n    jr-weekly-definition:: indented\n`jr-monthly-definition:: inline`";
+  root.content = `${root.content}\n${notes}`.replaceAll("\n", "\r\n");
+  const before = root.content;
+  await f.sync({ ...settings, calendar: "jalali" });
+  assert.equal(root.content, before.replace("jr-daily-calendar:: gregorian", "jr-daily-calendar:: jalali"));
+});
+
+test("context synchronization retains alias conflict and graph guards", async () => {
+  const f = fixture(); await f.install();
+  f.page().blocks[1].properties.jrDailyCalendar = "jalali";
+  const before = clone(f.page()), writes = f.calls.length;
+  await assert.rejects(f.sync({ ...settings, calendar: "jalali" }), /Conflicting/);
+  assert.deepEqual(f.page(), before); assert.equal(f.calls.length, writes);
+  delete f.page().blocks[1].properties.jrDailyCalendar;
+  f.setHook(async (kind) => { if (kind === "getBlock") f.stop(); });
+  await assert.rejects(f.sync({ ...settings, calendar: "jalali" }), /Graph changed/);
+  assert.equal(f.calls.length, writes);
+});
+
+test("context synchronization refuses a concurrent root edit before its single save", async () => {
+  const f = fixture(); await f.install(); const root = f.page().blocks[1];
+  const writes = f.calls.length; let reads = 0;
+  f.setHook(async (kind) => {
+    if (kind === "getBlock" && ++reads === 3) root.content += "\nConcurrent user note";
+  });
+  await assert.rejects(f.sync({ ...settings, calendar: "jalali" }), /root changed/);
+  assert.ok(root.content.endsWith("Concurrent user note"));
+  assert.equal(root.properties["jr-daily-calendar"], "gregorian");
   assert.equal(f.calls.length, writes);
 });
 
