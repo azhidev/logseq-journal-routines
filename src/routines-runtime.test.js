@@ -218,12 +218,57 @@ async function enableEmpty(f) {
   await f.runtime.enable();
 }
 
+test("onboarding detection and skip are persistent, graph-scoped and graph-write free", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const first = await f.runtime.start();
+  assert.equal(first.onboarding, "pending");
+  await f.runtime.refreshStatus();
+  assert.equal(f.records.size, 0, "opening setup does not persist or activate anything");
+  await f.runtime.skipOnboarding(first.graphKey);
+  assert.equal((await f.runtime.refreshStatus()).onboarding, "skipped");
+  assert.equal(f.runtime.getStatus().enabled, false);
+  assert.equal(f.pages().size, 0);
+  assert.equal(namedCalls(f, "createPage").length, 0);
+  const reloaded = f.newRuntime(); t.after(() => reloaded.destroy());
+  assert.equal((await reloaded.start()).onboarding, "skipped");
+  f.switchGraph("/graph/b", false);
+  assert.equal((await f.runtime.refreshStatus()).onboarding, "pending");
+  await assert.rejects(f.runtime.skipOnboarding(first.graphKey), /Graph changed/);
+  assert.equal(f.runtime.getStatus().onboarding, "pending");
+});
+
+test("setup after skipping preserves existing empty definitions and repeat setup preserves edits", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  const state = await f.runtime.start();
+  await f.runtime.skipOnboarding(state.graphKey);
+  await enableEmpty(f);
+  assert.equal(f.runtime.getStatus().onboarding, "completed");
+  for (const name of Object.values(state.definitions)) assert.deepEqual(f.pages().get(name).blocks, []);
+  const weekly = f.pages().get(currentPeriods(f).weekly.pageName);
+  contentBlocks(weekly)[0].content = "My edited routine summary";
+  const before = clone([...f.pages()]);
+  await f.runtime.enable(state.graphKey);
+  assert.deepEqual([...f.pages()], before);
+});
+
+test("previously saved alpha settings do not trigger a new welcome", async (t) => {
+  const f = fixture(); t.after(() => f.runtime.destroy());
+  await f.runtime.start();
+  await f.runtime.configure({ autoOpen: false });
+  const key = [...f.records.keys()].find((key) => key.includes("routines:v1:"));
+  delete f.records.get(key).onboarding;
+  assert.equal((await f.runtime.refreshStatus()).onboarding, "completed");
+  assert.equal(f.pages().size, 0);
+});
+
 test("first Enable seeds both new default definitions and current localized Gregorian pages once", async (t) => {
   const f = fixture(); t.after(() => f.runtime.destroy());
   const selected = currentPeriods(f);
   assert.equal((await f.runtime.start()).enabled, false);
   assert.equal(namedCalls(f, "createPage").length, 0);
   const state = await f.runtime.enable();
+  assert.equal(state.onboarding, "completed");
+  assert.equal((await f.runtime.refreshStatus()).onboarding, "completed");
   assert.equal(state.enabled, true);
   assert.equal(f.pages().size, 4);
   assert.equal(selected.weekly.pageName, "Week · Mar 16–Mar 22 — 2026-03-16");

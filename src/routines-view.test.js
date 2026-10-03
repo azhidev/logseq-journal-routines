@@ -75,7 +75,7 @@ function fixture(handlers = {}) {
   const calls = [];
   const defaults = Object.fromEntries([
     "onSave", "onEnable", "onQuickSetup", "onDisable", "onShowCurrent", "onShowHistory", "onAddExamples",
-    "onInstallDailyTemplate", "onApplyDailyTemplateToday", "onOpenDefinition", "onRefresh", "onClose",
+    "onInstallDailyTemplate", "onApplyDailyTemplateToday", "onOpenDefinition", "onRefresh", "onClose", "onSkip",
   ].map((name) => [name, (...args) => { calls.push([name, ...args]); }]));
   const view = mountRoutinesView(document, { ...defaults, ...handlers });
   const overlay = document.body.children[1], panel = overlay.children[0];
@@ -105,6 +105,49 @@ function listenerCount(node) {
   return [...node.listeners.values()].reduce((count, handlers) => count + handlers.size, 0) +
     (node.children || []).reduce((count, child) => count + listenerCount(child), 0);
 }
+
+test("welcome explains routines, provides a creation action and allows skipping without initialization", async () => {
+  const h = fixture(); h.view.render(ready({ onboarding: "pending" }));
+  assert.match(h.panel.textContent, /Welcome to Journal & Routines/);
+  assert.match(h.panel.textContent, /recurring weekly and monthly routines/);
+  assert.match(h.panel.textContent, /Existing routine pages are reused, never overwritten/);
+  assert.deepEqual(h.calls, []);
+  h.button("Create my first routine system").click(); await tick();
+  assert.equal(h.calls[0][0], "onQuickSetup");
+  assert.equal(h.calls[0][2], "graph:a");
+  h.button("Skip for now").click(); await tick();
+  assert.deepEqual(h.calls.at(-1), ["onSkip", "graph:a"]);
+  h.view.render(ready({ onboarding: "skipped" }));
+  assert.equal(h.button("Set up this graph").disabled, false);
+  h.view.destroy();
+});
+
+test("welcome skip and Escape cannot race a pending initialization; completion opens the workflow", async () => {
+  const pending = deferred();
+  const h = fixture({ onQuickSetup: () => pending.promise });
+  h.view.render(ready({ onboarding: "pending" }));
+  h.button("Create my first routine system").click();
+  assert.equal(h.button("Skip for now").disabled, true);
+  h.document.dispatch("keydown", { key: "Escape" });
+  assert.deepEqual(h.calls, []);
+  pending.resolve(); await tick();
+  h.view.render(ready({ onboarding: "completed", enabled: true, setupMessage: "Routines are ready." }));
+  h.button("Open my routines").click(); await tick();
+  assert.deepEqual(h.calls, [["onShowCurrent"]]);
+  h.view.destroy();
+});
+
+test("initialization evidence prevents a disabled prior attempt from being presented as a fresh welcome", () => {
+  const h = fixture();
+  for (const initialization of ["pending", "verified"]) {
+    h.view.render(ready({ onboarding: "pending", initialization, error: initialization === "pending" ? "Routine initialization is unfinished." : null }));
+    assert.doesNotMatch(h.panel.textContent, /Welcome to Journal & Routines/);
+    assert.equal(h.button("Set up this graph").disabled, false);
+    assert.equal(h.button("Close").disabled, false);
+    if (initialization === "pending") assert.equal(h.error.hidden, false);
+  }
+  h.view.destroy();
+});
 
 test("mount is inert, native and accessible, with concise setup guidance and no graph writes", () => {
   const h = fixture();

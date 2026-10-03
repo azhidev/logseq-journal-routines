@@ -17,6 +17,7 @@ function fixture() {
     },
     async enable(key) { calls.push(["enable", key]); state.enabled = true; return { ...state }; },
     async disable(key) { calls.push(["disable", key]); state.enabled = false; return { ...state }; },
+    async skipOnboarding(key) { calls.push(["skip", key]); state.onboarding = "skipped"; return { ...state }; },
     async showCurrent(key) { calls.push(key ? ["current", key] : "current"); },
     async addExamples(key) { calls.push(["examples", key]); },
     async installDailyTemplate(key, options) { calls.push(["daily-template", key, options]); return { ...state }; },
@@ -49,6 +50,49 @@ function fixture() {
   };
 }
 
+test("first run automatically welcomes without enabling; skip persists and setup reopens", async () => {
+  const f = fixture(); f.state.onboarding = "pending";
+  const plugin = await f.register();
+  assert.equal(f.calls.includes("show"), true);
+  assert.equal(f.renders.at(-1).onboarding, "pending");
+  assert.equal(f.state.enabled, false);
+  assert.equal(f.calls.some((call) => Array.isArray(call) && call[0] === "enable"), false);
+  await f.handlers.onSkip("graph-a");
+  assert.equal(f.state.onboarding, "skipped");
+  assert.deepEqual(f.calls.slice(-2), [["skip", "graph-a"], "hide"]);
+  await plugin.open();
+  assert.equal(f.renders.at(-1).onboarding, "skipped");
+  assert.equal(f.calls.at(-1), "show");
+  await plugin.destroy();
+});
+
+for (const onboarding of ["skipped", "completed"]) {
+  test(`startup does not reopen ${onboarding} onboarding`, async () => {
+    const f = fixture(); f.state.onboarding = onboarding;
+    const plugin = await f.register();
+    assert.deepEqual(f.calls, ["start"]);
+    await plugin.destroy();
+  });
+}
+
+for (const initialization of ["pending", "verified"]) {
+  test(`${initialization} initialization suppresses a fresh welcome even if preference completion was not saved`, async () => {
+    const f = fixture(); Object.assign(f.state, { onboarding: "pending", initialization, enabled: false });
+    const plugin = await f.register();
+    assert.equal(f.calls.includes("show"), false);
+    await plugin.open();
+    assert.equal(f.renders.at(-1).initialization, initialization);
+    await plugin.destroy();
+  });
+}
+
+test("enabled graph with an interrupted initialization is not presented as a fresh first run", async () => {
+  const f = fixture(); Object.assign(f.state, { onboarding: "pending", enabled: true, error: "Needs inspection" });
+  const plugin = await f.register();
+  assert.equal(f.calls.includes("show"), false);
+  await plugin.destroy();
+});
+
 test("new entry registration starts only lightweight runtime and mounts setup lazily", async () => {
   const f = fixture(), plugin = await f.register();
   assert.deepEqual(f.calls, ["start"]);
@@ -76,6 +120,159 @@ test("Enable saves approved graph-scoped choices first; disabled Save never enab
   assert.deepEqual(f.calls.slice(-2), [["configure", options, "graph-a", approval], ["enable", "graph-a"]]);
   await f.handlers.onSave({ calendar: "gregorian" }, "graph-a", approval);
   assert.deepEqual(f.calls.at(-1), ["enable", "graph-a"]);
+  await f.unload();
+});
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((done, failed) => { resolve = done; reject = failed; });
+  return { promise, resolve, reject };
+}
+
+test("standalone Enable offers completion and an explicit native-sidebar handoff", async () => {
+  const f = fixture(); f.state.onboarding = "pending";
+  await f.register();
+  await f.handlers.onEnable({}, "graph-a", {});
+  assert.equal(f.renders.at(-1).enabled, true);
+  assert.match(f.renders.at(-1).setupMessage, /routines are ready.*sidebar/);
+  assert.equal(f.destroyed, 0, "completion stays visible until explicit handoff");
+  assert.equal(f.calls.some((call) => Array.isArray(call) && ["daily-template", "daily-today"].includes(call[0])), false);
+  await f.handlers.onShowCurrent();
+  assert.deepEqual(f.calls.slice(-2), ["current", "hide"]);
+  assert.equal(f.destroyed, 1);
+  await f.unload();
+});
+
+for (const failure of [false, true]) {
+  for (const [label, method, invoke, cancelled] of [
+    ["refresh", "refreshStatus", (f) => f.handlers.onRefresh(), false],
+    ["daily installation", "installDailyTemplate", (f) => f.handlers.onInstallDailyTemplate("graph-a", {}), false],
+    ["Save", "configure", (f) => f.handlers.onSave({}, "graph-a", {}), true],
+    ["Enable", "enable", (f) => f.handlers.onEnable({}, "graph-a", {}), true],
+    ["quick setup", "installDailyTemplate", (f) => f.handlers.onQuickSetup({}, "graph-a", {}, { dailyTemplate: true }), true],
+  ]) {
+    test(`late ${label} ${failure ? "failure" : "success"} after Disable preserves the disabled render`, async () => {
+      const f = fixture(); await f.register(); await f.commands.get("journal-routines-setup")();
+      const outcome = deferred(), started = deferred();
+      f.runtime[method] = () => { started.resolve(); return outcome.promise; };
+      const pending = invoke(f);
+      await started.promise;
+      await f.handlers.onDisable("graph-a");
+      const renders = f.renders.length, disabled = f.renders.at(-1);
+      assert.equal(disabled.enabled, false);
+      assert.equal(disabled.setupMessage, undefined);
+      if (failure) {
+        outcome.reject(new Error("Late action failed"));
+        await assert.rejects(pending, /Late action failed|cancelled/);
+      } else {
+        outcome.resolve({ ...f.state, enabled: true });
+        if (cancelled) await assert.rejects(pending, /cancelled/);
+        else await pending;
+      }
+      assert.equal(f.renders.length, renders);
+      assert.equal(f.renders.at(-1), disabled);
+      assert.equal(f.calls.includes("hide"), false);
+      assert.equal(f.calls.some((call) => Array.isArray(call) && call[0] === "daily-today"), false);
+      await f.unload();
+    });
+  }
+}
+
+for (const failure of [false, true]) {
+  for (const [method, invoke] of [
+    ["showCurrent", (f) => f.handlers.onShowCurrent()],
+    ["showHistory", (f) => f.handlers.onShowHistory()],
+    ["openDefinition", (f) => f.handlers.onOpenDefinition("weekly")],
+    ["applyDailyTemplateToday", (f) => f.handlers.onApplyDailyTemplateToday("graph-a")],
+    ["skipOnboarding", (f) => f.handlers.onSkip("graph-a")],
+    ["addExamples", (f) => f.handlers.onAddExamples("graph-a")],
+  ]) {
+    test(`late ${method} ${failure ? "failure" : "success"} after Disable cannot navigate away`, async () => {
+      const f = fixture(); await f.register(); await f.commands.get("journal-routines-setup")();
+      const outcome = deferred();
+      f.runtime[method] = () => outcome.promise;
+      const pending = invoke(f);
+      await f.handlers.onDisable("graph-a");
+      const renders = f.renders.length, disabled = f.renders.at(-1);
+      if (failure) {
+        outcome.reject(new Error("Late navigation failed"));
+        await assert.rejects(pending, /Late navigation failed/);
+      } else {
+        outcome.resolve();
+        if (method === "addExamples") await assert.rejects(pending, /cancelled/);
+        else await pending;
+      }
+      assert.equal(f.renders.length, renders);
+      assert.equal(f.renders.at(-1), disabled);
+      assert.equal(f.destroyed, 0);
+      assert.equal(f.calls.includes("hide"), false);
+      assert.equal(f.calls.some((call) => Array.isArray(call) && call[0] === "current"), false);
+      await f.unload();
+    });
+  }
+}
+
+for (const failure of [false, true]) {
+  test(`late command ${failure ? "failure" : "success"} after Disable cannot toast or close setup`, async () => {
+    const f = fixture(); await f.register(); await f.commands.get("journal-routines-setup")();
+    const outcome = deferred();
+    f.runtime.showCurrent = () => outcome.promise;
+    const pending = f.commands.get("journal-routines-show")();
+    await f.commands.get("journal-routines-disable")();
+    const renders = f.renders.length;
+    if (failure) outcome.reject(new Error("Late command failed"));
+    else outcome.resolve();
+    await pending;
+    assert.equal(f.renders.length, renders);
+    assert.equal(f.calls.some((call) => Array.isArray(call) && call[0] === "message"), false);
+    assert.equal(f.calls.includes("hide"), false);
+    assert.equal(f.destroyed, 0);
+    await f.unload();
+  });
+}
+
+for (const failure of [false, true]) {
+  test(`older Disable ${failure ? "failure" : "success"} cannot overwrite a newer disabled result`, async () => {
+    const f = fixture(); await f.register(); await f.commands.get("journal-routines-setup")();
+    const outcome = deferred(), disable = f.runtime.disable;
+    f.runtime.disable = () => outcome.promise;
+    const pending = f.handlers.onDisable("graph-a");
+    f.runtime.disable = disable;
+    await f.handlers.onDisable("graph-a");
+    const renders = f.renders.length, disabled = f.renders.at(-1);
+    if (failure) {
+      outcome.reject(new Error("Older Disable failed"));
+      await assert.rejects(pending, /Older Disable failed/);
+    } else {
+      outcome.resolve({ ...f.state });
+      await pending;
+    }
+    assert.equal(f.renders.length, renders);
+    assert.equal(f.renders.at(-1), disabled);
+    await f.unload();
+  });
+}
+
+test("Disable command still reports its own current failure", async () => {
+  const f = fixture(); await f.register();
+  f.runtime.disable = async () => { throw new Error("Disable failed"); };
+  await f.commands.get("journal-routines-disable")();
+  assert.deepEqual(f.calls.at(-1), ["message", "Journal & Routines: Disable failed"]);
+  await f.unload();
+});
+
+test("late setup opening after Disable cannot replace the disabled result", async () => {
+  const f = fixture(), plugin = await f.register(); await plugin.open();
+  const outcome = deferred();
+  f.runtime.refreshStatus = () => outcome.promise;
+  const pending = plugin.open();
+  await f.handlers.onDisable("graph-a");
+  const renders = f.renders.length, shows = f.calls.filter((call) => call === "show").length;
+  outcome.resolve({ ...f.state, enabled: true });
+  await pending;
+  assert.equal(f.renders.length, renders);
+  assert.equal(f.renders.at(-1).enabled, false);
+  assert.equal(f.calls.filter((call) => call === "show").length, shows);
   await f.unload();
 });
 
@@ -138,10 +335,12 @@ test("quick setup stops on template refusal and keeps genuine today errors actio
   f.runtime.installDailyTemplate = async () => { throw new Error("Explicit replacement approval required"); };
   await assert.rejects(f.handlers.onQuickSetup({}, "graph-a", {}, { dailyTemplate: true }), /approval/);
   assert.equal(f.calls.some((call) => Array.isArray(call) && call[0] === "daily-today"), false);
+  assert.match(f.renders.at(-1).setupMessage, /routines are ready/);
   f.runtime.installDailyTemplate = async () => {};
   f.runtime.applyDailyTemplateToday = async () => { throw new Error("Native insert outcome uncertain"); };
   await assert.rejects(f.handlers.onQuickSetup({}, "graph-a", {}, { dailyTemplate: true }), /installed.*needs attention.*uncertain/);
   assert.match(f.renders.at(-1).error, /needs attention/);
+  assert.match(f.renders.at(-1).setupMessage, /routines are ready/);
 });
 
 for (const interrupt of ["disable", "graph", "unload"]) {

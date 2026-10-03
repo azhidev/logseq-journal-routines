@@ -14,7 +14,7 @@ let nextViewId = 0;
  */
 export function mountRoutinesView(document, {
   onSave, onEnable, onQuickSetup, onDisable, onShowCurrent, onShowHistory,
-  onAddExamples, onInstallDailyTemplate, onApplyDailyTemplateToday, onOpenDefinition, onRefresh, onClose,
+  onAddExamples, onInstallDailyTemplate, onApplyDailyTemplateToday, onOpenDefinition, onRefresh, onClose, onSkip,
 }) {
   const id = `jr-routines-${++nextViewId}`;
   const previousFocus = document.activeElement;
@@ -80,8 +80,11 @@ export function mountRoutinesView(document, {
   panel.setAttribute("role", "dialog");
   panel.setAttribute("aria-modal", "true");
   panel.setAttribute("aria-labelledby", `${id}-title`);
-  element("h1", "Journal & Routines", panel).id = `${id}-title`;
-  element("p", "Your weekly routines and daily plan, together in Logseq.", panel).className = "jr-routines-intro";
+  const title = element("h1", "Journal & Routines", panel);
+  title.id = `${id}-title`;
+  element("p", "Manage recurring weekly and monthly routines inside your Logseq workflow. Check off tasks in the right sidebar; each new week and month gets a fresh copy.", panel).className = "jr-routines-intro";
+  const welcomeHelp = element("p", "We’ll create your routine pages for you and open the current week and month in the sidebar. Existing routine pages are reused, never overwritten. Edit the weekly and monthly definitions to choose tasks for future periods.", panel);
+  welcomeHelp.hidden = true;
   const summary = element("div", undefined, panel);
   summary.className = "jr-routines-summary";
   const graph = element("p", undefined, summary);
@@ -181,6 +184,8 @@ export function mountRoutinesView(document, {
   const more = button("More options", primaryActions);
   more.setAttribute("aria-controls", advanced.id);
   more.setAttribute("aria-expanded", "false");
+  const finish = button("Open my routines", primaryActions);
+  finish.hidden = true;
   const close = button("Close", primaryActions);
   listen(more, "click", () => {
     advanced.hidden = !advanced.hidden;
@@ -188,6 +193,7 @@ export function mountRoutinesView(document, {
   });
 
   function graphReady() { return typeof state?.graphKey === "string" && !!state.graphKey; }
+  function welcoming() { return state?.onboarding === "pending" && !state?.enabled && !state?.initialization; }
   function changedCalendar() { return graphReady() && calendar.value !== state.calendar; }
   function setError(message) {
     error.textContent = message == null ? "" : String(message);
@@ -202,7 +208,12 @@ export function mountRoutinesView(document, {
     autoOpen.disabled = locked;
     includeDaily.disabled = locked;
     quickSetup.disabled = locked || needsConfirmation;
-    quickSetup.textContent = pending.has("quickSetup") ? "Setting up…" : "Set up this graph";
+    quickSetup.textContent = pending.has("quickSetup") ? "Setting up…" :
+          welcoming() ? "Create my first routine system" : "Set up this graph";
+        close.textContent = welcoming() ? "Skip for now" : "Close";
+        finish.hidden = !state?.enabled || !state?.setupMessage;
+        finish.disabled = locked;
+        close.disabled = close.textContent === "Skip for now" && busy;
     for (const input of Object.values(definitions)) input.disabled = locked || !!state?.enabled;
     confirmation.hidden = !needsConfirmation;
     confirmationText.textContent = `Switch from ${state?.calendar} to ${calendar.value}? Old periods and history are preserved as-is: no conversions, renaming, merging or deletion. The selected calendar determines current periods after you save or enable.`;
@@ -219,7 +230,7 @@ export function mountRoutinesView(document, {
     applyDailyTemplateToday.disabled = installDailyTemplate.disabled;
     for (const node of [history, weekly, monthly]) node.disabled = locked;
     refresh.disabled = busy;
-    close.disabled = false;
+
   }
 
   async function run(name, handler, args = [], interrupt = false) {
@@ -300,7 +311,8 @@ export function mountRoutinesView(document, {
     [history, "history", onShowHistory],
     [weekly, "weekly", onOpenDefinition, () => ["weekly"]],
     [monthly, "monthly", onOpenDefinition, () => ["monthly"]],
-    [refresh, "refresh", onRefresh], [close, "close", onClose, undefined, true],
+    [refresh, "refresh", onRefresh], [finish, "finish", onShowCurrent],
+        [close, "close", () => welcoming() ? onSkip(state.graphKey) : onClose(), undefined, true],
   ]) {
     listen(node, "click", () => {
       if (destroyed || node.disabled) return;
@@ -339,6 +351,8 @@ export function mountRoutinesView(document, {
     revision++;
     if (state?.graphKey !== next?.graphKey) { pending = new Set(); includeDaily.checked = true; }
     state = next ? { ...next, definitions: { ...next.definitions } } : null;
+    title.textContent = welcoming() ? "Welcome to Journal & Routines" : "Journal & Routines";
+    welcomeHelp.hidden = !welcoming();
     approvedCalendar = null;
     replaceExisting.checked = false;
     feedback.textContent = state?.setupMessage ?? "";

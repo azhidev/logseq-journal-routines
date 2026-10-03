@@ -28,19 +28,21 @@ const EXAMPLES = Object.freeze({
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 const EXAMPLE_RESOURCES = [["weekly", "period"], ["monthly", "period"],
   ["weekly", "definition"], ["monthly", "definition"]];
-const defaults = () => ({ version: 1, enabled: false, calendar: "gregorian", autoOpen: true,
+const defaults = () => ({ version: 1, enabled: false, onboarding: "pending", calendar: "gregorian", autoOpen: true,
   definitions: { ...DEFAULT_DEFINITIONS } });
 
 function validateSettings(value) {
   if (value === null) return defaults();
   if (!value || value.version !== 1 || typeof value.enabled !== "boolean" ||
     typeof value.autoOpen !== "boolean" || !["gregorian", "jalali"].includes(value.calendar) ||
+        (value.onboarding !== undefined && !["pending", "skipped", "completed"].includes(value.onboarding)) ||
     !value.definitions || KINDS.some((kind) => typeof value.definitions[kind] !== "string" ||
       !value.definitions[kind].trim()) ||
     value.definitions.weekly.trim().toLowerCase() === value.definitions.monthly.trim().toLowerCase()) {
     throw new Error("Invalid graph routines settings; definition pages must be distinct and settings valid.");
   }
   return { version: 1, enabled: value.enabled, calendar: value.calendar,
+      onboarding: value.onboarding ?? "completed",
     autoOpen: value.autoOpen, definitions: { ...value.definitions } };
 }
 
@@ -192,6 +194,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
   function getStatus() {
     return { started, graphKey: context?.key ?? null, graphName: context?.name ?? null,
       enabled: active(), calendar: context?.settings.calendar ?? null,
+            onboarding: context?.settings.onboarding ?? null,
       autoOpen: context?.settings.autoOpen ?? null,
       definitions: context ? { ...context.settings.definitions } : null,
       paused: !!context?.settings.enabled && stopped.has(context.key), error: lastError, dailyTemplateWarning };
@@ -202,6 +205,15 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       // Reading setup status never initializes pages or grants activation.
       return getStatus();
     });
+  }
+  function skipOnboarding(expectedGraphKey) {
+    return enqueue(async (ticket) => {
+      const ctx = await identityContext(ticket);
+      if (ctx.settings.onboarding === "pending") {
+        await save(ctx, { ...ctx.settings, onboarding: "skipped" }, ticket);
+      }
+      return getStatus();
+    }, expectedGraphKey);
   }
   function resume() {
     if (document?.visibilityState !== "hidden") void refreshAutomatic().catch(() => {});
@@ -521,9 +533,10 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       if (freshDefaults) {
         await runCurrent(ticket, false, true);
         await insertExamples(ticket);
-        return runCurrent(ticket, true);
-      }
-      return runCurrent(ticket);
+        await runCurrent(ticket, true);
+      } else await runCurrent(ticket);
+      if (ctx.settings.onboarding !== "completed") await save(ctx, { ...ctx.settings, onboarding: "completed" }, ticket);
+      return getStatus();
     }, expectedGraphKey);
   }
   function disable(expectedGraphKey) {
@@ -901,5 +914,5 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
     storage.close?.();
   }
   return { start, destroy, enable, disable, configure, refreshStatus, showCurrent,
-    openDefinition, showHistory, addExamples, installDailyTemplate, applyDailyTemplateToday, getStatus };
+    openDefinition, showHistory, addExamples, installDailyTemplate, applyDailyTemplateToday, skipOnboarding, getStatus };
 }
