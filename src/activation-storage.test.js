@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import test from "node:test";
 import { createActivationStorage, graphIdentity } from "./activation-storage.js";
+import browserFixture from "../scripts/browser-fixture.cjs";
 
 
 // Deliberately separate request success from transaction completion/abort. This
@@ -170,7 +171,7 @@ test("invalid keys/uncloneable data reject without opening the database", async 
   assert.equal(f.opens.length, 0); store.close();
 });
 
-const chrome = [process.env.CHROME_BIN, "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((path) => path && existsSync(path));
+const chrome = browserFixture.resolveChrome();
 // A real-time CDP pipe avoids virtual-time/dump-dom racing disk-backed IDB work.
 async function inBrowser(profile, url, expression) {
   const child = spawn(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run",

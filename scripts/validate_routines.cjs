@@ -5,7 +5,7 @@
 // query evaluation/rendering, native template application/config persistence,
 // Calendar transport, or IndexedDB durability.
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
+const { fixtureDOM, resolveChrome } = require("./browser-fixture.cjs");
 const { mkdtempSync, writeFileSync, rmSync, existsSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
@@ -349,11 +349,27 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
     check(!document.querySelector(".jr-routines img, .jr-routines script"), "Untrusted text became HTML");
     check(!window.fixtureInjected, "Untrusted text executed");
   };
+  async function register() {
+    runtime = createRoutinesRuntime({ sdk, storage, document, timers: trackedTimers, now: () => new Date(2026, 2, 21, 12) });
+    registration = await registerRoutines(sdk, { document, runtime });
+  }
+  async function reload() {
+    await registration.destroy();
+    equal(storageClosed, 1, "Previous runtime closed its storage handle once");
+    equal(graphListeners.size, 0, "Previous registration released graph listeners");
+    equal(timers.size, 0, "Previous runtime released timers");
+    equal(allListeners(), 0, "Previous view/runtime released document listeners");
+    check(!document.querySelector(".jr-routines"), "Previous view removed before re-registration");
+    // Reopen a fake storage handle over the same durable records, and use a fresh
+    // command registry/unload hook as a new plugin SDK registration would.
+    storageClosed = 0;
+    commands.clear(); unload = null;
+    await register();
+  }
   let failure;
   try {
-    await test("register/start is read-only, Gregorian standalone, six native commands", async () => {
-      runtime = createRoutinesRuntime({ sdk, storage, document, timers: trackedTimers, now: () => new Date(2026, 2, 21, 12) });
-      registration = await registerRoutines(sdk, { document, runtime });
+    await test("register/start automatically welcomes a fresh graph without activation or graph writes", async () => {
+      await register();
       equal([...commands.keys()], ["setup", "show", "history", "definition-weekly", "definition-monthly", "disable"].map((key) => `journal-routines-${key}`), "Registered commands");
       equal(writes().length, 0, "No startup writes"); equal(named("calendar").length, 0, "No startup Calendar");
       equal(records.size, 0, "No startup storage writes"); equal(timers.size, 0, "No disabled schedule");
@@ -361,9 +377,37 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
       equal(toolbar.key, "journal-routines-open", "Toolbar key");
       check(toolbar.template.includes('data-on-click="openJournalRoutinesSetup"'), "Toolbar model binding");
       check(toolbar.template.includes('aria-label="Open Journal &amp; Routines"'), "Toolbar accessible label");
-      check(!document.querySelector(".jr-routines"), "Setup mounts lazily");
+      equal(document.querySelectorAll(".jr-routines").length, 1, "Fresh welcome mounts automatically once");
+      equal(runtime.getStatus().onboarding, "pending", "Fresh graph onboarding is pending");
+      check(!runtime.getStatus().enabled, "Welcome does not activate routines");
+      check(document.querySelector(".jr-routines").textContent.includes("Welcome to Journal & Routines"), "Welcome heading");
+      check(!button("Create my first routine system").disabled, "Explicit creation is available");
+      check(!field("autoOpen").disabled, "Auto-open preference is available before creation");
+      equal(named("showUI").length, 1, "Automatic welcome uses native showMainUI once");
+      equal(named("sidebar").length, 0, "Welcome opens no routine panes"); safeDOM();
     });
-    await test("toolbar launcher opens and closes setup without graph writes", async () => {
+    await test("Skip for now persists only a graph-local dismissal without activation", async () => {
+      const before = JSON.stringify([...pages.values()]);
+      await click("Skip for now", { closes: true });
+      equal(saved().onboarding, "skipped", "Skip persisted in graph settings");
+      check(!saved().enabled && !runtime.getStatus().enabled, "Skip does not enable routines");
+      equal(runtime.getStatus().onboarding, "skipped", "Runtime reflects dismissal");
+      equal(JSON.stringify([...pages.values()]), before, "Skip preserves all graph content");
+      equal(writes().length, 0, "Skip performs no graph/config writes");
+      equal(named("sidebar").length, 0, "Skip opens no sidebar");
+      equal(timers.size, 0, "Skip starts no schedule");
+    });
+    await test("skipped welcome stays dismissed across runtime reload and re-registration", async () => {
+      const shows = named("showUI").length, before = JSON.stringify([...records]);
+      await reload();
+      equal(runtime.getStatus().onboarding, "skipped", "Reload reads graph-local dismissal");
+      equal(JSON.stringify([...records]), before, "Reload does not rewrite dismissal or metadata");
+      check(!document.querySelector(".jr-routines"), "Skipped graph stays quiet after reload");
+      equal(named("showUI").length, shows, "No automatic showMainUI after skipping");
+      equal(writes().length, 0, "Skipped reload creates no graph resources");
+      equal(named("sidebar").length, 0, "Skipped reload opens no panes");
+    });
+    await test("toolbar launcher reopens skipped setup and closes without graph writes", async () => {
       await model.openJournalRoutinesSetup();
       equal(document.querySelectorAll(".jr-routines").length, 1, "Toolbar opened one setup view");
       equal(writes().length, 0, "Toolbar setup is read-only");
@@ -375,20 +419,45 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
       equal(document.querySelector('[role=status]').textContent, "Disabled", "Initial status");
       check(document.querySelector(".jr-routines").textContent.includes(graph.name), "Graph name rendered literally");
       check(document.activeElement === field("calendar"), "Initial focus");
-      equal(named("showUI").length, 2, "Toolbar and palette use native showMainUI");
+      equal(named("showUI").length, 3, "Fresh welcome, toolbar reopen and palette use native showMainUI");
+      equal(runtime.getStatus().onboarding, "skipped", "Explicit reopening preserves dismissal until initialization");
+      check(!button("Set up this graph").disabled, "Skipped setup still offers explicit initialization");
       equal(writes().length, 0, "Opening setup is read-only"); safeDOM();
     });
     await test("Save Gregorian settings persists graph-scoped choices without enabling", async () => {
       field("weeklyDefinition").value = definitions.weekly;
       field("monthlyDefinition").value = definitions.monthly;
-      field("autoOpen").checked = true;
+      field("autoOpen").checked = false;
       await click("Save settings");
-      equal(saved(), { version: 1, enabled: false, calendar: "gregorian", autoOpen: true, definitions }, "Saved settings");
+      equal(saved(), { version: 1, enabled: false, calendar: "gregorian", onboarding: "skipped", autoOpen: false, definitions }, "Saved settings");
       check(/^[a-f0-9]{64}$/.test(runtime.getStatus().graphKey), "Stable hashed graph identity");
       equal(writes().length, 0, "Save creates no graph resources");
       equal(named("sidebar").length, 0, "Save opens no sidebar"); equal(timers.size, 0, "Save starts no timer");
     });
-    await test("explicit Enable creates only current Gregorian periods and native sidebar requests", async () => {
+    await test("existing saved installation suppresses welcome even without an onboarding field", async () => {
+      // Model settings saved before onboarding existed; no migration is required.
+      const key = `journal-routines:routines:v1:${runtime.getStatus().graphKey}`;
+      const skipped = clone(saved()), existing = clone(skipped); delete existing.onboarding;
+      records.set(key, existing);
+      const shows = named("showUI").length, before = JSON.stringify([...records]);
+      await reload();
+      equal(runtime.getStatus().onboarding, "completed", "Existing settings suppress first-run onboarding");
+      check(!document.querySelector(".jr-routines"), "Existing installation does not mount welcome");
+      equal(named("showUI").length, shows, "Existing installation makes no automatic UI request");
+      equal(JSON.stringify([...records]), before, "Reading existing settings is not a storage migration");
+      equal(writes().length, 0, "Existing disabled installation remains graph-read-only");
+      await commands.get("journal-routines-setup")();
+      check(!button("Set up this graph").disabled, "Existing installation can explicitly reopen setup");
+      equal(field("autoOpen").checked, false, "Reload preserves auto-open opt-out");
+      // Restore the skipped fixture preferences so the next scenario exercises
+      // skipped -> completed through real initialization, not just legacy defaults.
+      records.set(key, skipped);
+      await reload();
+      equal(runtime.getStatus().onboarding, "skipped", "Skipped preferences restored for initialization scenario");
+      check(!document.querySelector(".jr-routines"), "Restored dismissal still suppresses welcome");
+      await commands.get("journal-routines-setup")();
+    });
+    await test("explicit Enable initializes current Gregorian periods but respects autoOpen=false", async () => {
       await click("Enable");
       check(saved().enabled && runtime.getStatus().enabled, "Enable persisted and active");
       equal(document.querySelector('[role=status]').textContent, "Enabled", "Enabled UI");
@@ -408,9 +477,12 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
         equal(plan.ids, flatten(contentBlocks(page)).map((block) => block.uuid), "Durable clone identities excluding header");
         check(/^[a-f0-9]{64}$/.test(plan.hash), "Snapshot fingerprint");
       }
-      equal(named("sidebar").map((call) => call[1]),
-        [period("gregorian", "monthly"), period("gregorian", "weekly")].map((page) => contentBlocks(page)[0].uuid),
-        "Native summary blocks opened month first so week is above it");
+      equal(saved().onboarding, "completed", "Successful initialization persists onboarding completion");
+      equal(runtime.getStatus().onboarding, "completed", "Runtime reports completed initialization");
+      equal(saved().autoOpen, false, "Initialization preserves auto-open opt-out");
+      equal(named("sidebar").length, 0, "Enable does not auto-open opted-out panes");
+      check(document.querySelector(".jr-routines-feedback").textContent.includes("routines are ready"), "Standalone Enable provides completion feedback");
+      check(!button("Open my routines").hidden && !button("Open my routines").disabled, "Standalone Enable offers explicit sidebar handoff");
       check(sidebar.has(900001), "Unrelated sidebar pane preserved");
       equal(named("calendar").length, 0, "Entire Gregorian flow made zero Calendar calls");
       equal(named("createPage").length, 2, "Existing definitions reused; no other page creation");
@@ -418,6 +490,35 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
       equal(timers.size, 1, "One day-boundary timeout");
       check([...timers.values()][0] > 60 * 60 * 1000, "No short polling timer");
       equal(countListeners("visibilitychange"), 1, "Visibility listener"); equal(countListeners("resume"), 1, "Resume listener");
+    });
+    await test("enabled reload stays quiet with autoOpen=false; Open my routines explicitly opens native panes", async () => {
+      const before = JSON.stringify(periods()), count = writes().length, shows = named("showUI").length;
+      await reload();
+      check(runtime.getStatus().enabled, "Enabled graph resumes after reload");
+      equal(runtime.getStatus().onboarding, "completed", "Completion survives reload");
+      equal(named("showUI").length, shows, "Completed graph does not automatically reopen setup");
+      equal(named("sidebar").length, 0, "Enabled startup respects auto-open opt-out");
+      equal(JSON.stringify(periods()), before, "Startup reuses initialized snapshots");
+      equal(writes().length, count, "Startup does not rewrite snapshots");
+      await commands.get("journal-routines-setup")();
+      const todayQueries = named("todayQuery").length, configs = clone(graphConfigs);
+      field("includeDaily").click();
+      check(!field("includeDaily").checked, "Repeated initialization is routines only");
+      await click("Set up this graph");
+      equal(saved().autoOpen, false, "Repeated setup preserves auto-open opt-out");
+      equal(named("sidebar").length, 0, "Repeated setup still respects opt-out");
+      equal(writes().length, count, "Repeated setup performs no graph/config writes");
+      equal(JSON.stringify(periods()), before, "Repeated setup preserves initialized snapshots");
+      equal(named("todayQuery").length, todayQueries, "Routine-only setup performs no today lookup");
+      equal(graphConfigs, configs, "Routine-only setup preserves native daily defaults");
+      await click("Open my routines", { closes: true });
+      equal(named("sidebar").map((call) => call[1]),
+        [period("gregorian", "monthly"), period("gregorian", "weekly")].map((page) => contentBlocks(page)[0].uuid),
+        "Explicit handoff opens native summary blocks month first so week is above it");
+      equal(JSON.stringify(periods()), before, "Explicit handoff preserves initialized tasks");
+      equal(writes().length, count, "Explicit handoff creates no duplicate resources");
+      check(sidebar.has(900001), "Explicit handoff preserves unrelated pane");
+      await commands.get("journal-routines-setup")();
     });
     await test("optional examples refuse to overwrite populated periods and definitions", async () => {
       const before = JSON.stringify(periods()), count = writes().length;
@@ -523,7 +624,7 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
       equal(field("calendar").value, "gregorian", "Reopened authoritative calendar");
     });
     await test("confirmed Jalali switch creates current periods and preserves Gregorian history", async () => {
-      const old = JSON.stringify(periods());
+      const old = JSON.stringify(periods()), sidebarRequests = named("sidebar").length;
       selectCalendar("jalali");
       // Prior approval must not survive the failed submission/reopened view.
       check(button("Save settings").disabled, "Fresh confirmation required");
@@ -531,6 +632,8 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
       equal(saved().calendar, "gregorian", "Confirmation alone is not a save");
       await click("Save settings");
       equal(saved().calendar, "jalali", "Jalali persisted"); equal(periods().length, 4, "Two additional calendar-qualified periods");
+      equal(saved().autoOpen, false, "Jalali switch preserves auto-open opt-out");
+      equal(named("sidebar").length, sidebarRequests, "Jalali initialization needs no automatic sidebar opening");
       equal(JSON.stringify(periods().filter((page) => page.properties["jr-calendar"] === "gregorian")), old, "Old periods preserved byte-for-byte");
       equal(period("jalali", "weekly").properties["jr-start"], "2026-03-21", "Saturday start");
       equal(period("jalali", "weekly").properties["jr-end"], "2026-03-27", "Friday end");
@@ -600,8 +703,10 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
     await test("switch back reuses original Gregorian tasks without Calendar invocation", async () => {
       const before = JSON.stringify(periods()), count = writes().length, calendarCalls = named("calendar").length;
       const root = contentBlocks(pageBy(dailyTemplatePage))[0], sections = JSON.stringify(root.children);
-      const configs = clone(graphConfigs);
+      const configs = clone(graphConfigs), sidebarRequests = named("sidebar").length;
       selectCalendar("gregorian"); await click("Confirm calendar change"); await click("Save settings");
+      equal(saved().autoOpen, false, "Gregorian switch preserves auto-open opt-out");
+      equal(named("sidebar").length, sidebarRequests, "Gregorian switch does not automatically open opted-out panes");
       equal(saved().calendar, "gregorian", "Switched back"); equal(JSON.stringify(periods()), before, "Both calendars retained");
       equal(writes().slice(count).map((call) => [call[0], call[1]]), [["updateBlock", root.uuid]], "Only the owned template root context is saved");
       equal(root.properties["jr-daily-calendar"], "gregorian", "Template context follows calendar switch");
@@ -678,35 +783,9 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
   }
 }
 
-function dumpDOM(chrome, args) {
-  return new Promise((resolveResult, reject) => {
-    // A separate process group lets the wall-clock deadline kill Chrome helpers
-    // as well as the browser, including when the renderer never completes.
-    const child = spawn(chrome, args, { detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "", failure;
-    const kill = () => {
-      if (!child.pid) return;
-      try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") failure ||= error; }
-    };
-    const timer = setTimeout(() => { failure = new Error("Chrome fixture exceeded 45-second wall-clock timeout"); kill(); }, 45000);
-    child.stdout.on("data", (data) => {
-      stdout += data;
-      if (stdout.length > 8 * 1024 * 1024) { failure = new Error("Chrome DOM output exceeded 8 MiB"); kill(); }
-    });
-    child.stderr.on("data", (data) => { stderr = (stderr + data).slice(-12000); });
-    child.once("error", (error) => { failure = error; });
-    child.once("exit", kill);
-    child.once("close", (code, signal) => {
-      clearTimeout(timer); kill();
-      if (failure || code !== 0) reject(new Error(`${failure?.message || `Chrome exited ${code} (${signal})`}\n${stderr}`));
-      else resolveResult({ stdout, stderr });
-    });
-  });
-}
-
 async function main() {
-  const chrome = process.env.CHROME_BIN || "/usr/bin/google-chrome";
-  assert.ok(existsSync(chrome), `Chrome not found: ${chrome}`);
+  const chrome = resolveChrome();
+  assert.ok(chrome && existsSync(chrome), `Chrome not found: ${chrome}`);
   const temp = mkdtempSync(join(tmpdir(), "journal-routines-smoke-"));
   try {
     const bundle = esbuild.buildSync({
@@ -717,9 +796,8 @@ async function main() {
     writeFileSync(join(temp, "fixture.js"), bundle.outputFiles[0].contents);
     const html = join(temp, "fixture.html");
     writeFileSync(html, '<!doctype html><html><head><meta charset="utf-8"><title>Journal & Routines — fixture only</title></head><body><pre id="fixture-result">RUNNING</pre><script src="fixture.js"></script></body></html>');
-    const { stdout, stderr } = await dumpDOM(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-      "--no-first-run", "--no-default-browser-check", `--user-data-dir=${join(temp, "profile")}`,
-      "--dump-dom", "--timeout=30000", "--virtual-time-budget=20000", pathToFileURL(html).href]);
+    const { stdout, stderr } = await fixtureDOM(chrome, join(temp, "profile"), pathToFileURL(html).href,
+      "document.getElementById('fixture-result')?.dataset.complete === 'true'", 45000);
     const match = stdout.match(/<pre\b[^>]*id="fixture-result"[^>]*data-complete="true"[^>]*>([^<]*)<\/pre>/);
     assert.ok(match, `Browser fixture did not report completion.\n${stdout.slice(-4000)}\n${stderr}`);
     const report = JSON.parse(decodeURIComponent(match[1]));
@@ -732,8 +810,8 @@ async function main() {
     console.log(`Fixture pages created: ${report.summary.pagesCreated}; native sidebar requests: ${report.summary.sidebarRequests}; Calendar invocations (Jalali tests): ${report.summary.calendarInvocations}`);
     assert.equal(report.failure, undefined, report.failure);
     assert.equal(report.fixtureOnly, true);
-    assert.equal(report.summary.tests, 22, "All smoke scenarios must run");
-    assert.equal(report.summary.passed, 22, "All smoke scenarios must pass");
+    assert.equal(report.summary.tests, 26, "All smoke scenarios must run");
+    assert.equal(report.summary.passed, 26, "All smoke scenarios must pass");
   } finally {
     rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }

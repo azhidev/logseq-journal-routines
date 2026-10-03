@@ -4,13 +4,13 @@ import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { spawnSync } from "node:child_process";
+import browserFixture from "../scripts/browser-fixture.cjs";
 import { DAILY_PRESENTATION_STYLE } from "./daily-presentation.js";
 
 // Renderer-shaped DOM fixture only; not Logseq Desktop query execution/rendering.
-test("Chromium presentation hides only empty marked sections and preserves tasks, errors and user content", { timeout: 40000 }, () => {
-  const chrome = "/usr/bin/google-chrome";
-  assert.ok(existsSync(chrome), "Chromium is required for the native-shaped presentation fixture");
+test("Chromium presentation hides only empty marked sections and preserves tasks, errors and user content", { timeout: 40000 }, async () => {
+  const chrome = browserFixture.resolveChrome();
+  assert.ok(chrome && existsSync(chrome), "Chromium is required for the native-shaped presentation fixture");
   const temp = mkdtempSync(join(tmpdir(), "jr-daily-presentation-"));
   try {
     function section(id, kind, result, extra = "") {
@@ -45,9 +45,8 @@ test("Chromium presentation hides only empty marked sections and preserves tasks
       const output = document.createElement('pre'); output.id = 'result'; output.textContent = encodeURIComponent(JSON.stringify(result)); document.body.append(output);
       </script>`;
     const file = join(temp, "fixture.html"); writeFileSync(file, html);
-    const result = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run",
-      `--user-data-dir=${join(temp, "profile")}`, "--dump-dom", pathToFileURL(file).href], { encoding: "utf8", timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
-    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    const result = await browserFixture.fixtureDOM(chrome, join(temp, "profile"), pathToFileURL(file).href,
+      "!!document.getElementById('result')");
     const match = /<pre id="result">([^<]+)<\/pre>/.exec(result.stdout);
     assert.ok(match, "Chromium must return the DOM assertions");
     const report = JSON.parse(decodeURIComponent(match[1]));
