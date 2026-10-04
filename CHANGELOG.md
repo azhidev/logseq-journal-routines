@@ -16,6 +16,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - 208 targeted Node fixtures passed across daily-template, daily-today, setup view and registration tests. These include existing one-block templates, graph isolation, replacement approval, apply/save feedback and keyboard focus. No full-suite, build or live Desktop validation was run for this update.
 
+## [0.5.0-alpha.2] — 2026-10-04
+
+- Fixed the browser fixture CI deadline using real-time Chrome DevTools Protocol completion checks.
+- Aligned browser fixtures with the current Daily UI, including section previews and Apply selected options.
+- Prerelease candidate for release infrastructure and update testing; this release preparation changes no application behavior and does not establish live Desktop validation.
+
 ## [0.5.0-alpha.1] — 2026-10-02
 
 Development alpha, not a beta release. This entry describes the implemented alpha; it does **not** claim the release gate has passed. Actual Logseq Desktop validation (rendering, indexing, persistence, native template application) is still outstanding — see [NEXT_SESSION.md](NEXT_SESSION.md).

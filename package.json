@@ -1,6 +1,6 @@
 {
   "name": "logseq-journal-routines",
-  "version": "0.5.0-alpha.1",
+  "version": "0.5.0-alpha.2",
   "private": true,
   "description": "Lightweight weekly/monthly routine pages in Logseq's sidebar; Gregorian standalone, optional Jalali.",
   "type": "module",
