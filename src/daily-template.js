@@ -88,14 +88,16 @@ export function dailyTemplateNodes() {
   return [
     { parent: null, content: sectionHeading(0) },
     { parent: 0, content: "" },
+    { parent: 0, content: "" },
     { parent: null, content: sectionHeading(1) },
-    { parent: 2, content: "" },
+    { parent: 3, content: "" },
+    { parent: 3, content: "" },
     { parent: null, content: sectionHeading(2) },
-    { parent: 4, content: dailyTaskQuery("priority") },
+    { parent: 6, content: dailyTaskQuery("priority") },
     { parent: null, content: sectionHeading(3) },
-    { parent: 6, content: dailyTaskQuery("pending") },
+    { parent: 8, content: dailyTaskQuery("pending") },
     { parent: null, content: sectionHeading(4) },
-    { parent: 8, content: dailyTaskQuery("weekly") },
+    { parent: 10, content: dailyTaskQuery("weekly") },
   ];
 }
 

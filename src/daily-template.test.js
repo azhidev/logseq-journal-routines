@@ -143,11 +143,35 @@ test("explicit install creates a native template once, preserves config siblings
   assert.equal(root.properties.template, DAILY_TEMPLATE);
   assert.equal(root.properties["template-including-parent"], "false");
   assert.equal(root.children.length, 5);
+  for (const section of root.children.slice(0, 2)) {
+    assert.equal(section.children.length, 2, "Focus and Tasks each have two default blocks");
+    assert.ok(section.children.every((block) => block.content === `\nid:: ${block.uuid}`));
+    assert.notEqual(section.children[0].uuid, section.children[1].uuid);
+    assert.equal(section.children[1].left.id, section.children[0].id);
+  }
   assert.equal(f.calls[0][0], "marker", "durable attempt before graph writes");
   const before = clone(f.page()), writes = f.calls.length;
   await f.install();
   assert.deepEqual(f.page(), before);
   assert.equal(f.calls.length, writes, "repeat install writes nothing");
+});
+
+test("reinstall on an existing graph preserves one-block templates, edits and graph-local markers", async () => {
+  const f = fixture(); await f.install();
+  const root = f.page().blocks[1];
+  // Existing installed template from before the two-block default.
+  for (const section of root.children.slice(0, 2)) section.children.splice(1);
+  const before = clone(f.page()), records = clone(f.records), writes = f.calls.length;
+  await f.install();
+  assert.deepEqual(f.page(), before, "no automatic template refill or journal migration");
+  assert.deepEqual(f.records, records, "existing creation evidence stays compatible");
+  assert.equal(f.calls.length, writes);
+  root.children[0].children[0].content = "My daily plan";
+  root.children[1].children = [];
+  const edited = clone(f.page());
+  await f.install();
+  assert.deepEqual(f.page(), edited, "edited and deliberately deleted blanks are preserved");
+  assert.equal(f.calls.length, writes);
 });
 
 test("existing native default requires explicit replacement; original content and other defaults remain", async () => {

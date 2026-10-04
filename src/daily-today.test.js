@@ -140,6 +140,10 @@ for (const empty of [false, true]) {
       const sections = f.today.blocks.filter((block) => withoutID(block).trim());
       assert.deepEqual(sections.map(withoutID), f.root.children.map(withoutID));
       assert.equal(sections.length, 5);
+      for (const section of sections.slice(0, 2)) {
+        assert.equal(section.children.length, 2);
+        assert.ok(section.children.every((child) => withoutID(child) === ""));
+      }
       assert.equal(f.calls.filter(([name]) => name === "insertTemplate").length, 1);
       assert.equal(f.calls.filter(([name]) => name === "insertBlock").length, Number(empty));
       const markerAt = f.calls.findIndex(([name]) => name === "storage.set");
@@ -192,12 +196,24 @@ test("missing registered root subtree fails before any journal write", async () 
 test("user-edited source section content and nested query structure are copied only by native API", async () => {
   const f = fixture({ tuples: true });
   f.root.children[0].content = "## My focus";
-  f.source[5].content = "#+BEGIN_QUERY\n{:title \"Custom query\"}\n#+END_QUERY";
-  f.add(f.source[5], f.owner, "Nested custom note", 99);
+  const priorityQuery = f.root.children[2].children[0];
+  priorityQuery.content = "#+BEGIN_QUERY\n{:title \"Custom query\"}\n#+END_QUERY";
+  f.add(priorityQuery, f.owner, "Nested custom note", 99);
   await f.apply();
   assert.equal(f.today.blocks[0].content.split("\n")[0], "## My focus");
   assert.equal(f.today.blocks[2].children[0].children[0].content.split("\n")[0], "Nested custom note");
   assert.equal(f.writes().length, 1, "no plugin task-cloning writes");
+});
+
+test("existing one-block template remains valid for guarded native today application", async () => {
+  const f = fixture(), tomorrow = clone(f.tomorrow);
+  for (const section of f.root.children.slice(0, 2)) section.children.splice(1);
+  const source = clone(f.owner);
+  await f.apply();
+  assert.deepEqual(f.owner, source);
+  assert.deepEqual(f.tomorrow, tomorrow);
+  assert.deepEqual(f.today.blocks.slice(0, 2).map((section) => section.children.length), [1, 1]);
+  assert.equal(f.writes().length, 1, "copy the installed native template, not the new defaults");
 });
 
 test("matching id properties/lines and explicit false header aliases are safe; native anchor may remain", async () => {
@@ -319,7 +335,7 @@ for (const [name, edit] of [
 
 test("template expansion is bounded to 100 blocks including root", async () => {
   const f = fixture();
-  for (let i = 0; i < 90; i++) f.add(f.source[5], f.owner, `note ${i}`, 100 + i);
+  for (let i = 0; i < 90; i++) f.add(f.root.children[2].children[0], f.owner, `note ${i}`, 100 + i);
   await assert.rejects(f.apply(), /100 blocks/);
   assert.equal(f.writes().length, 0);
 });
