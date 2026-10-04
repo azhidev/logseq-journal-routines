@@ -367,7 +367,8 @@ test("daily template callback forwards graph and replacement opt-in, refreshes s
     assert.equal(result.graphKey, "graph-a");
   }
   assert.equal(f.renders.length, renders + 2);
-  assert.deepEqual(f.renders.at(-1), f.runtime.getStatus());
+  assert.deepEqual(f.renders.at(-1), { ...f.runtime.getStatus(), setupMessage:
+    "Daily template selected for eligible empty journals. Existing journals and template edits were preserved. To apply it to an empty today, use Apply daily template to today." });
   assert.equal(f.destroyed, 0);
   assert.equal(f.calls.includes("hide"), false);
   assert.equal(f.calls.some((call) => Array.isArray(call) && ["enable", "configure"].includes(call[0])), false);
@@ -392,6 +393,24 @@ test("late daily template installation cannot render into a different setup gene
   await pending;
   assert.equal(f.renders.length, renders);
   assert.equal(f.renders.at(-1).graphKey, "graph-b");
+  assert.equal(f.renders.at(-1).setupMessage, undefined);
+  await f.unload();
+});
+
+test("routine-only save reports success without implying daily selections were applied", async () => {
+  const f = fixture(); await f.register(); await f.commands.get("journal-routines-setup")();
+  await f.handlers.onSave({ autoOpen: false }, "graph-a", {});
+  assert.match(f.renders.at(-1).setupMessage, /settings saved.*remain disabled.*daily journal default was left unchanged/);
+  assert.equal(f.state.autoOpen, false);
+  assert.equal(f.state.enabled, false);
+  await f.handlers.onEnable({}, "graph-a", {});
+  await f.handlers.onSave({ autoOpen: true }, "graph-a", {});
+  assert.match(f.renders.at(-1).setupMessage, /settings saved and applied.*daily journal default was left unchanged/);
+  assert.equal(f.calls.some((call) => Array.isArray(call) && ["daily-template", "daily-today"].includes(call[0])), false);
+  for (const hook of f.hooks) hook();
+  f.state.graphKey = "graph-b";
+  await f.commands.get("journal-routines-setup")();
+  assert.equal(f.renders.at(-1).setupMessage, undefined);
   await f.unload();
 });
 

@@ -41,15 +41,17 @@ export async function registerRoutines(sdk, { document = globalThis.document,
     const action = actionGeneration;
     return update(async () => {
       const status = await runtime.configure(options, key, confirmation);
-      if (disposed || action !== actionGeneration) throw new Error("Setup action cancelled.");
+      if (disposed || action !== actionGeneration || runtime.getStatus().graphKey !== key) throw new Error("Setup action cancelled.");
       // Apply a calendar change immediately for an already-enabled graph. Saving
       // settings on a disabled graph never grants activation or creates pages.
       if (enabling || status.enabled) {
         const result = await runtime.enable(key);
         if (disposed || action !== actionGeneration || runtime.getStatus().graphKey !== key) throw new Error("Setup action cancelled.");
         if (enabling) setupFeedback = { graphKey: key, message: "Your routines are ready. Open them in the sidebar to start checking off tasks. Edit the weekly and monthly definitions to choose routines for future periods." };
+        else setupFeedback = { graphKey: key, message: "Routine settings saved and applied. The daily journal default was left unchanged." };
         return result;
       }
+      setupFeedback = { graphKey: key, message: "Routine settings saved. Routines remain disabled; the daily journal default was left unchanged." };
       return status;
     });
   }
@@ -84,6 +86,15 @@ export async function registerRoutines(sdk, { document = globalThis.document,
     actionGeneration++;
     setupFeedback = null;
     return update(() => runtime.disable(key));
+  }
+  async function installDailyTemplate(key, options) {
+    const action = actionGeneration;
+    return update(async () => {
+      const result = await runtime.installDailyTemplate(key, options);
+      if (disposed || action !== actionGeneration || runtime.getStatus().graphKey !== key) return result;
+      setupFeedback = { graphKey: key, message: "Daily template selected for eligible empty journals. Existing journals and template edits were preserved. To apply it to an empty today, use Apply daily template to today." };
+      return result;
+    });
   }
   async function navigate(action) {
     const version = viewGeneration, generation = actionGeneration;
@@ -125,7 +136,7 @@ export async function registerRoutines(sdk, { document = globalThis.document,
             await runtime.showCurrent(key);
           });
         },
-        onInstallDailyTemplate: (key, options) => update(() => runtime.installDailyTemplate(key, options)),
+        onInstallDailyTemplate: installDailyTemplate,
         onApplyDailyTemplateToday: (key) => navigate(() => runtime.applyDailyTemplateToday(key)),
         onShowHistory: () => navigate(() => runtime.showHistory()),
         onOpenDefinition: (kind) => navigate(() => runtime.openDefinition(kind)),

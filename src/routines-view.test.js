@@ -239,6 +239,53 @@ test("primary setup locks duplicate actions and requires calendar approval", asy
   h.view.render(ready({ calendar: "jalali", enabled: true })); assert.equal(primary.disabled, false);
 });
 
+test("existing graph exposes daily selection and one apply action without opening advanced tools", async () => {
+  const h = fixture(); h.button("More options").click();
+  h.view.render(ready({ enabled: true, autoOpen: false }));
+  const primary = h.button("Apply selected options");
+  assert.equal(primary.visible, true);
+  assert.equal(h.input("includeDaily").visible, true);
+  assert.equal(h.button("Save settings").visible, false);
+  assert.equal(h.button("Install daily journal template").visible, false);
+  assert.match(h.panel.textContent, /Daily journals \(optional\)/);
+  assert.match(h.input("includeDaily").parent.textContent, /Use the daily journal template \(recommended\)/);
+  assert.match(h.panel.textContent, /two empty editable blocks each/);
+  assert.ok(h.input("includeDaily").attributes["aria-describedby"]);
+  h.input("includeDaily").click();
+  assert.match(h.panel.textContent, /daily template and all existing journals stay unchanged/);
+  primary.click(); await tick();
+  assert.deepEqual(h.calls, [["onQuickSetup", { calendar: "gregorian", autoOpen: false,
+    definitions: { weekly: "Weekly routines", monthly: "Monthly routines" } }, "graph:a", {},
+    { dailyTemplate: false, replaceExisting: false }]]);
+  h.view.render(ready({ enabled: true, setupMessage: "Routines are ready. Daily default unchanged." }));
+  assert.equal(h.input("includeDaily").checked, false, "same-graph render retains selection");
+  const feedback = h.panel.querySelectorAll("p").find((node) => node.className === "jr-routines-feedback");
+  assert.equal(feedback.hidden, false);
+  assert.equal(feedback.attributes["aria-live"], "polite");
+  h.view.render(ready({ graphKey: "graph:b", enabled: true }));
+  assert.equal(h.input("includeDaily").checked, true, "selection never leaks across graphs");
+  assert.equal(feedback.hidden, true);
+  h.view.destroy();
+});
+
+test("existing-graph apply communicates busy state and consumes replacement approval", async () => {
+  const work = deferred(), calls = [];
+  const h = fixture({ onQuickSetup: (...args) => { calls.push(args); return work.promise; } });
+  h.view.render(ready({ enabled: true }));
+  const primary = h.button("Apply selected options");
+  h.input("replaceExisting").click(); primary.click();
+  assert.equal(primary.textContent, "Applying…");
+  assert.equal(primary.disabled, true);
+  primary.dispatch("click");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0][3], { dailyTemplate: true, replaceExisting: true });
+  assert.equal(h.input("replaceExisting").checked, false);
+  work.reject(new Error("Existing default was preserved")); await tick();
+  assert.equal(primary.textContent, "Apply selected options");
+  assert.match(h.error.textContent, /default was preserved/);
+  h.view.destroy();
+});
+
 test("Save and Enable each pass options, captured graph key and configure-compatible approval", async () => {
   const h = fixture();
   h.view.render(ready());
@@ -627,7 +674,7 @@ test("focus traps enabled visible controls, handles outside focus and Escape eve
   h.view.focus();
   assert.equal(h.document.activeElement, h.calendar);
   h.document.dispatch("keydown", { key: "Tab", shiftKey: true });
-  assert.equal(h.document.activeElement, h.button("Close"));
+  assert.ok(h.document.activeElement === h.button("Refresh"), "expanded tools follow the primary actions in tab order");
   assert.equal(h.document.dispatch("keydown", { key: "Tab" }).defaultPrevented, true);
   assert.equal(h.document.activeElement, h.calendar);
   assert.equal(h.document.dispatch("keydown", { key: "Tab" }).defaultPrevented, false);
@@ -640,11 +687,11 @@ test("focus traps enabled visible controls, handles outside focus and Escape eve
   assert.equal(h.document.activeElement, h.calendar);
   h.button("Save settings").click();
   h.view.focus();
-  assert.equal(h.document.activeElement, h.button("Disable"));
+  assert.ok(h.document.activeElement === h.button("More options"));
   h.document.dispatch("keydown", { key: "Tab", shiftKey: true });
-  assert.equal(h.document.activeElement, h.button("Close"));
+  assert.ok(h.document.activeElement === h.button("Disable"));
   h.document.dispatch("keydown", { key: "Tab" });
-  assert.equal(h.document.activeElement, h.button("Disable"));
+  assert.ok(h.document.activeElement === h.button("More options"));
   const escape = h.document.dispatch("keydown", { key: "Escape" });
   assert.equal(escape.defaultPrevented, true);
   assert.equal(escape.propagationStopped, true);

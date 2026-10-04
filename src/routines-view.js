@@ -47,7 +47,7 @@ export function mountRoutinesView(document, {
     .jr-routines h1 { margin: 0; font-size: 1.6rem; letter-spacing: -.03em; }
     .jr-routines h2 { margin: 20px 0 8px; font-size: 1rem; }
     .jr-routines-intro { color: GrayText; }
-    .jr-routines-preview { padding: 14px 16px; border-radius: 10px; line-height: 1.9;
+    .jr-routines-preview { padding: 14px 16px; border-radius: 10px; line-height: 1.9; list-style: none;
       background: color-mix(in srgb, Highlight 8%, Canvas); }
     .jr-routines-primary { background: Highlight !important; color: HighlightText !important;
       border-color: Highlight !important; font-weight: 600 !important; flex: 1; }
@@ -101,7 +101,7 @@ export function mountRoutinesView(document, {
   advanced.className = "jr-routines-advanced";
   advanced.id = `${id}-advanced`;
   advanced.hidden = true;
-  element("h2", "Definitions and manual actions", advanced);
+  element("h2", "Routine definitions", advanced);
   element("p", "Early build — Logseq Desktop 0.10.15 behavior is unverified. Test on a disposable Markdown file graph first.", advanced);
   element("p", "Enable creates one current week and month snapshot. When both default definition pages are new, it seeds two Persian TODOs in each definition and current period; existing or selected definitions are left unchanged. No journal edits or template changes.", advanced);
   element("p", "Edit definitions before Enable to choose your own first tasks. Later definition edits affect future periods only: no refill of deleted tasks, reset of completed tasks, or carry-forward. Missed periods are not backfilled; history stays intact when disabled.", advanced);
@@ -143,18 +143,33 @@ export function mountRoutinesView(document, {
   autoOpen.type = "checkbox";
   autoOpen.name = "autoOpen";
   element("span", "Automatically open current routines on activation, startup and rollover", autoLabel);
-  const dailyLabel = element("label", undefined, panel);
+  const daily = element("section", undefined, panel);
+  const dailyHeading = element("h2", "Daily journals (optional)", daily);
+  dailyHeading.id = `${id}-daily-title`;
+  daily.setAttribute("aria-labelledby", dailyHeading.id);
+  const dailyLabel = element("label", undefined, daily);
   const includeDaily = element("input", undefined, dailyLabel);
   includeDaily.type = "checkbox";
   includeDaily.name = "includeDaily";
   includeDaily.checked = true;
-  element("span", "Include the daily journal template and apply it to today if empty", dailyLabel);
-  element("div", "🎯 Focus  ·  ☑️ Tasks  ·  🚩 Priority A  ·  ⏳ Pending  ·  📅 This week", panel).className = "jr-routines-preview";
-  element("p", "One step enables routines and sets up your daily plan. Populated journals and completed tasks are preserved.", panel);
-  element("h2", "Daily template tools", advanced);
+  element("span", "Use the daily journal template (recommended)", dailyLabel);
+  const dailyHelp = element("p", "Select to install the five sections below and apply them to today only if empty. Leave unchecked for routines only; an existing daily default stays unchanged.", daily);
+  dailyHelp.id = `${id}-daily-help`;
+  includeDaily.setAttribute("aria-describedby", dailyHelp.id);
+  const preview = element("ul", undefined, daily);
+  preview.className = "jr-routines-preview";
+  for (const description of [
+    "🎯 Focus and ☑️ Tasks — two empty editable blocks each in new template installations",
+    "🚩 Priority A — unfinished priority-A tasks, excluding WAITING",
+    "⏳ Pending — tasks marked WAITING",
+    "📅 This week — current weekly tasks and tasks scheduled or due this week",
+  ]) element("li", description, preview);
+  const applyHelp = element("p", undefined, panel);
+  applyHelp.id = `${id}-apply-help`;
+  element("h2", "Daily journal tools (manual)", advanced);
   element("p", "Install separately from Enable. Focus and Tasks provide space for your daily plan and tasks. Priority A shows unfinished priority-A tasks, excluding WAITING; Pending shows WAITING tasks. This week shows original weekly routine tasks and tasks scheduled or due this week, without copying them.", advanced);
   element("p", "Logseq’s native default template applies to eligible empty today/future journals, not populated journals. An existing nonblank, different default journal template is never replaced without your approval; its content is preserved.", advanced);
-  const replaceLabel = element("label", undefined, panel);
+  const replaceLabel = element("label", undefined, daily);
   const replaceExisting = element("input", undefined, replaceLabel);
   replaceExisting.type = "checkbox";
   replaceExisting.name = "replaceExisting";
@@ -164,6 +179,8 @@ export function mountRoutinesView(document, {
   element("p", "The native default applies to eligible future pages but may skip today’s preexisting blank block. Apply daily template to today targets the actual native today only if its journal is empty or has one blank block; populated journals are refused. Install the template first. This separate action does not target the journal you happen to be browsing.", advanced);
   const applyDailyTemplateToday = button("Apply daily template to today", advanced);
 
+  element("h2", "Routine controls (manual)", advanced);
+  element("p", "Save settings changes only routine preferences, not the daily template. Use the primary action to apply both your routine and daily selections together.", advanced);
   const actions = element("div", undefined, advanced);
   actions.className = "jr-routines-actions";
   const save = button("Save settings", actions);
@@ -176,17 +193,18 @@ export function mountRoutinesView(document, {
   const weekly = button("Open weekly definition", actions);
   const monthly = button("Open monthly definition", actions);
   const refresh = button("Refresh", actions);
-  panel.appendChild(advanced);
   const primaryActions = element("div", undefined, panel);
   primaryActions.className = "jr-routines-actions";
   const quickSetup = button("Set up this graph", primaryActions);
   quickSetup.className = "jr-routines-primary";
+  quickSetup.setAttribute("aria-describedby", applyHelp.id);
   const more = button("More options", primaryActions);
   more.setAttribute("aria-controls", advanced.id);
   more.setAttribute("aria-expanded", "false");
   const finish = button("Open my routines", primaryActions);
   finish.hidden = true;
   const close = button("Close", primaryActions);
+  panel.appendChild(advanced);
   listen(more, "click", () => {
     advanced.hidden = !advanced.hidden;
     more.setAttribute("aria-expanded", String(!advanced.hidden));
@@ -208,8 +226,11 @@ export function mountRoutinesView(document, {
     autoOpen.disabled = locked;
     includeDaily.disabled = locked;
     quickSetup.disabled = locked || needsConfirmation;
-    quickSetup.textContent = pending.has("quickSetup") ? "Setting up…" :
-          welcoming() ? "Create my first routine system" : "Set up this graph";
+    quickSetup.textContent = pending.has("quickSetup") ? (state?.enabled ? "Applying…" : "Setting up…") :
+          welcoming() ? "Create my first routine system" : state?.enabled ? "Apply selected options" : "Set up this graph";
+    applyHelp.textContent = includeDaily.checked
+      ? "One action saves routine settings, enables routines and installs the daily template, then tries today if empty. Populated journals and completed tasks are preserved. Existing template edits are kept."
+      : "One action saves routine settings and enables routines. The daily template and all existing journals stay unchanged.";
         close.textContent = welcoming() ? "Skip for now" : "Close";
         finish.hidden = !state?.enabled || !state?.setupMessage;
         finish.disabled = locked;
