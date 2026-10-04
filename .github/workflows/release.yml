@@ -1,0 +1,64 @@
+name: Release plugin
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run automated tests
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+        run: |
+          test -x "$CHROME_BIN"
+          npm test
+          npm run test:browser
+          npm run test:release
+      - name: Build and package matching version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:package -- --tag "$RELEASE_TAG"
+      - name: Create release and attach installable ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="release/journal-routines-${RELEASE_TAG#v}.zip"
+          if gh release view "$RELEASE_TAG" >/dev/null; then
+            gh release upload "$RELEASE_TAG" "$asset" --clobber
+          else
+            flags=()
+            if [[ "$RELEASE_TAG" == *-* ]]; then
+              flags+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" "$asset" --verify-tag \
+              --title "$RELEASE_TAG" --generate-notes "${flags[@]}"
+          fi

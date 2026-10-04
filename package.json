@@ -9,7 +9,9 @@
   "scripts": {
     "build": "esbuild src/index.js --bundle --format=iife --platform=browser --outfile=dist/index.js",
     "test": "node --test src/*.test.js",
-    "test:browser": "node scripts/validate_routines.cjs"
+    "test:browser": "node scripts/validate_routines.cjs",
+    "test:release": "python3 -B -m unittest discover -s scripts -p 'test_package_release.py'",
+    "release:package": "python3 -B scripts/package_release.py"
   },
   "dependencies": {
     "@logseq/libs": "0.0.17"

@@ -89,6 +89,10 @@ If a future journal received the template but today did not, native Logseq may h
 
 ## Development
 
+Built release packaging and the future version-tag workflow are documented in
+[RELEASE.md](RELEASE.md). Release infrastructure is available; no public release
+or Marketplace submission is implied, and Desktop/update QA remains outstanding.
+
 - Product contract: [SCOPE.md](SCOPE.md)
 - Architecture and host boundary: [ENGINE.md](ENGINE.md)
 - Validation gate and known incidents: [NEXT_SESSION.md](NEXT_SESSION.md)
