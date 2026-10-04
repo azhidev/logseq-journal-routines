@@ -39,17 +39,18 @@ test("browser resolver reports absence and does not hide discovery errors", () =
     readdir: () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); } }), /denied/);
 });
 
-test("CDP fixture waits for asynchronous DOM completion in an isolated profile", { timeout: 10000 }, async () => {
+test("CDP fixture waits for asynchronous DOM completion in an isolated profile", { timeout: 20000 }, async () => {
   assert.ok(chrome && existsSync(chrome), "Chromium is required for browser fixture validation");
   const temp = mkdtempSync(join(tmpdir(), "jr-browser-runner-"));
   try {
     const html = join(temp, "fixture.html");
+    // Completion beyond five seconds must fit the startup-inclusive CI deadline.
     writeFileSync(html, `<!doctype html><body><pre id="result">RUNNING</pre><script>
       setTimeout(() => { const node = document.getElementById('result');
-        node.textContent = 'PASS'; node.dataset.complete = 'true'; }, 100);
+        node.textContent = 'PASS'; node.dataset.complete = 'true'; }, 5500);
       </script></body>`);
     const result = await browserFixture.fixtureDOM(chrome, join(temp, "profile"), pathToFileURL(html).href,
-      "document.getElementById('result')?.dataset.complete === 'true'", 5000);
+      "document.getElementById('result')?.dataset.complete === 'true'", 15000);
     assert.match(result.stdout, /<pre id="result" data-complete="true">PASS<\/pre>/);
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
