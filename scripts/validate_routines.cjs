@@ -504,7 +504,7 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
       const todayQueries = named("todayQuery").length, configs = clone(graphConfigs);
       field("includeDaily").click();
       check(!field("includeDaily").checked, "Repeated initialization is routines only");
-      await click("Set up this graph");
+      await click("Apply selected options");
       equal(saved().autoOpen, false, "Repeated setup preserves auto-open opt-out");
       equal(named("sidebar").length, 0, "Repeated setup still respects opt-out");
       equal(writes().length, count, "Repeated setup performs no graph/config writes");
@@ -663,7 +663,11 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
       equal(root.properties["jr-weekly-definition"], `page-uuid:${weeklySource.uuid}`, "Weekly definition context");
       equal(root.properties["jr-monthly-definition"], `page-uuid:${monthlySource.uuid}`, "Monthly definition context");
       equal(root.children.map(content), ["## 🎯 Focus", "## ☑️ Tasks", "## 🚩 Priority A", "## ⏳ Pending", "## 📅 This week"], "Five native sections");
-      check(root.children.every((section) => section.children.length === 1), "Each section has its native content child");
+      equal(root.children.map((section) => section.children.length), [2, 2, 1, 1, 1], "Two editable blanks in Focus/Tasks and one native query per task section");
+      for (const section of root.children.slice(0, 2)) {
+        equal(section.children.map(content), ["", ""], "Focus/Tasks children are empty editable blocks");
+        check(section.children.every((child) => child.children.length === 0), "Editable blanks have no nested content");
+      }
       check(root.children.slice(2).every((section) => content(section.children[0]).includes("#+BEGIN_QUERY")), "Task sections use native queries");
       equal(graphConfigs, { "default-templates": { journals: dailyTemplateName, pages: "Existing page template", extra: "preserve me" },
         "preferred-format": "markdown" }, "Config map and unrelated top-level settings preserved");
@@ -684,7 +688,7 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
     await test("primary setup combines routines and daily installation, with an accurate missing-today result", async () => {
       const count = writes().length, before = JSON.stringify([...pages.values()]);
       check(field("includeDaily").checked, "Daily template is explicitly selected by default");
-      await click("Set up this graph");
+      await click("Apply selected options");
       equal(writes().length, count, "Existing resources and missing today are not rewritten/created");
       equal(JSON.stringify([...pages.values()]), before, "Combined setup preserves graph content");
       equal(named("todayQuery").length, 1, "Only one native today lookup, not a historical inventory");
@@ -694,7 +698,7 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
     });
     await test("routine-only primary setup does not install or apply a daily template", async () => {
       const count = writes().length, todayQueries = named("todayQuery").length, configs = clone(graphConfigs);
-      field("includeDaily").click(); await click("Set up this graph");
+      field("includeDaily").click(); await click("Apply selected options");
       equal(named("todayQuery").length, todayQueries, "Opt-out performs no today lookup");
       equal(writes().length, count, "Opt-out does not write template or journal blocks");
       equal(graphConfigs, configs, "Opt-out preserves the existing daily default");
