@@ -4,6 +4,18 @@ All notable changes to Journal & Routines are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- New daily template installations start Focus and Tasks with two empty editable blocks each. Existing templates and journals are not refilled or migrated.
+- Daily selection now has a labeled optional group and explanatory section preview. Enabled graphs offer **Apply selected options**; advanced tools are grouped by purpose, and routine-only saves and manual template installation report what was applied.
+- Graph-local settings, stored configuration, replacement approval and durable safety markers remain compatible and unchanged.
+
+### Validation
+
+- 208 targeted Node fixtures passed across daily-template, daily-today, setup view and registration tests. These include existing one-block templates, graph isolation, replacement approval, apply/save feedback and keyboard focus. No full-suite, build or live Desktop validation was run for this update.
+
 ## [0.5.0-alpha.1] — 2026-10-02
 
 Development alpha, not a beta release. This entry describes the implemented alpha; it does **not** claim the release gate has passed. Actual Logseq Desktop validation (rendering, indexing, persistence, native template application) is still outstanding — see [NEXT_SESSION.md](NEXT_SESSION.md).
