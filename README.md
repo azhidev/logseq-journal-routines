@@ -2,7 +2,7 @@
 
 Lightweight weekly and monthly routines in Logseq's native right sidebar.
 
-**Status: development alpha (`0.5.0-alpha.1`), not production-ready.** The replacement runtime is implemented; the latest onboarding and safety changes have not yet been validated by test/build execution. Actual Logseq Desktop validation is still outstanding. Target: **Logseq Desktop 0.10.15, Markdown file graphs**. Database graphs, Org and mobile are not supported targets.
+**Status: `0.5.0` release candidate, not published or production-ready.** Actual Logseq Desktop validation is still outstanding. Target: **Logseq Desktop 0.10.15, Markdown file graphs**. Database graphs, Org and mobile are not supported targets.
 
 > **Logseq 0.10.15 metadata fix — keep affected graphs disabled.** New period/history pages no longer pass metadata objects to `createPage`, which could leave an unserializable `cljs-bean/Bean` in the database and block graph persistence. Pages are now created property-free and metadata is written as verified text. This prevents new occurrences; it does not repair graphs already affected. Keep the plugin disabled in affected graphs pending a separate safe recovery procedure. Do not clear storage or force recovery; see [NEXT_SESSION.md](NEXT_SESSION.md).
 
@@ -27,7 +27,15 @@ Journal & Routines is a lightweight Logseq plugin that shows the current week's 
 
 ## Installation
 
-Use disposable graphs only while the development-alpha Desktop validation gate remains outstanding.
+Use disposable graphs only while the Desktop validation gate remains outstanding. Marketplace installation is not available yet.
+
+For a built release, download the attached `journal-routines-<version>.zip` from
+[GitHub Releases](https://github.com/azhidev/logseq-journal-routines/releases)
+(not the automatic source archive), extract it to a dedicated plugin directory,
+and load that directory with **Plugins → Load unpacked plugin**. No build is
+needed. `v0.5.0` is not published yet; the existing alpha releases remain unchanged.
+
+For source installation:
 
 1. From this plugin directory (the one containing `package.json`), run `npm ci` if dependencies are not installed, then `npm run build`. The build creates `dist/index.js`; `index.html` loads that file. `dist/` is Git-ignored, so a fresh checkout must be built before loading it locally.
 2. In Logseq Desktop, use **Plugins → Load unpacked plugin** and select **this plugin directory** (not the graph folder or `dist/`). The manifest points to the bundled `icon.png` at this same directory level.
@@ -90,7 +98,7 @@ If a future journal received the template but today did not, native Logseq may h
 ## Development
 
 Built release packaging and the future version-tag workflow are documented in
-[RELEASE.md](RELEASE.md). Release infrastructure is available; no public release
+[RELEASE.md](RELEASE.md). Alpha releases are available; no regular release
 or Marketplace submission is implied, and Desktop/update QA remains outstanding.
 
 - Product contract: [SCOPE.md](SCOPE.md)
@@ -106,7 +114,7 @@ npm run test:browser
 npm run build
 ```
 
-Earlier automated Node fixtures, Chromium smoke checks and pinned native DataScript fixtures passed; those results do not validate the latest onboarding and safety changes, whose tests/build have not yet been executed. Automated fixtures are not live Desktop validation. See [NEXT_SESSION.md](NEXT_SESSION.md) for the remaining release gate.
+Automated fixtures are not live Desktop validation. Current release-candidate checks and Marketplace blockers are recorded in [RELEASE.md](RELEASE.md); see [NEXT_SESSION.md](NEXT_SESSION.md) for the remaining Desktop gate.
 
 ## License
 

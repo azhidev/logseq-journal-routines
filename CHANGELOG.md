@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] — Release candidate (not published)
+
+- First regular-release candidate for native weekly/monthly routines, optional Jalali and the optional daily journal template.
+- Prepares version metadata and the official Marketplace manifest; plugin identity and graph-local storage remain unchanged for subsequent update testing.
+- No runtime changes relative to v0.5.0-alpha.2. Desktop release QA and a real usage screenshot remain publication gates; automated fixtures do not establish Desktop readiness.
+
+The following daily-template/UI changes were already included in v0.5.0-alpha.2:
+
 ### Changed
 
 - New daily template installations start Focus and Tasks with two empty editable blocks each. Existing templates and journals are not refilled or migrated.
@@ -14,7 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Validation
 
-- 208 targeted Node fixtures passed across daily-template, daily-today, setup view and registration tests. These include existing one-block templates, graph isolation, replacement approval, apply/save feedback and keyboard focus. No full-suite, build or live Desktop validation was run for this update.
+- Release-candidate checks on 2026-10-05: 736 Node tests, 26 assembled Chromium scenarios, production build and release packaging checks passed. These are automated fixtures, not live Logseq Desktop or real update validation.
 
 ## [0.5.0-alpha.2] — 2026-10-04
 

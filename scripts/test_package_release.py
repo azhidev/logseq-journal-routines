@@ -6,7 +6,27 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from package_release import FILES, package
+from package_release import FILES, ROOT, package
+
+
+class MarketplaceManifestTests(unittest.TestCase):
+    def test_proposal_uses_official_fields_and_supported_graph_target(self):
+        manifest = json.loads((ROOT / "marketplace/packages/logseq-journal-routines/manifest.json").read_text())
+        allowed = {"title", "description", "author", "repo", "icon", "theme",
+                   "sponsors", "web", "effect", "supportsDB", "supportsDBOnly"}
+        self.assertLessEqual(set(manifest), allowed)
+        for key in ("title", "description", "author", "repo"):
+            self.assertIsInstance(manifest[key], str)
+            self.assertTrue(manifest[key].strip())
+        self.assertEqual(manifest["repo"], "azhidev/logseq-journal-routines")
+        plugin = json.loads((ROOT / "package.json").read_text())
+        self.assertEqual(manifest["title"], plugin["logseq"]["title"])
+        self.assertEqual(manifest["icon"], "icon.png")
+        self.assertTrue((ROOT / manifest["icon"]).is_file())
+        for key in ("effect", "supportsDB", "supportsDBOnly"):
+            self.assertIs(manifest[key], False)
+        for key in ("theme", "web"):
+            self.assertIs(manifest.get(key, False), False)
 
 
 class ReleasePackageTests(unittest.TestCase):

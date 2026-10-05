@@ -1,0 +1,10 @@
+{
+  "title": "Journal & Routines",
+  "description": "Weekly and monthly routines in Logseq's native sidebar, with an optional daily journal template and Jalali calendar.",
+  "author": "azhidev",
+  "repo": "azhidev/logseq-journal-routines",
+  "icon": "icon.png",
+  "effect": false,
+  "supportsDB": false,
+  "supportsDBOnly": false
+}
