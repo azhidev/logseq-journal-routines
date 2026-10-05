@@ -32,6 +32,8 @@ Approved:
 
 Confirmed week starts: **Saturday for Jalali/Persian, Monday for Gregorian**. The user explicitly corrected the earlier calendar-label typo; this decision is settled.
 
+Gregorian weekly sidebar headers show the ISO 8601 week number, including ISO week-year boundaries, alongside the existing civil date range. This is presentation only: stored page names, navigation and Jalali labels remain unchanged.
+
 No configurable week-start framework is needed in the first release. Today uses the device's local civil date, not UTC; timezone changes never rewrite existing period content.
 
 ## D3 — Current sidebar plus accessible history [approved; concrete UX below is recommendation]

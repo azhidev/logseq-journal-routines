@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import {
-  localCivilDate, gregorianPeriods, makePeriod, periodIdentity,
+  localCivilDate, gregorianPeriods, isoWeekNumber, makePeriod, periodIdentity,
   periodPageName, periodMetadata, matchesPeriodMetadata,
 } from "./period-model.js";
 
@@ -53,6 +53,15 @@ test("Gregorian months are full calendar months, including leap and century rule
   ]) {
     assert.deepEqual(bounds(gregorianPeriods(date(today)).monthly), expected, today);
   }
+});
+
+test("ISO weeks use Monday and the week containing January 4 across year boundaries", () => {
+  for (const [day, expected] of [
+    ["2026-07-15", 29], ["2026-10-05", 41],
+    ["2020-12-31", 53], ["2021-01-01", 53], ["2021-01-03", 53], ["2021-01-04", 1],
+    ["2024-12-29", 52], ["2024-12-30", 1], ["2025-01-01", 1], ["2025-01-05", 1], ["2025-01-06", 2],
+  ]) assert.equal(isoWeekNumber(day), expected, day);
+  assert.throws(() => isoWeekNumber("2026-02-30"), /Invalid Gregorian civil date/);
 });
 
 test("legacy model names, identity and properties are deterministic and calendar/kind/bound-qualified", () => {

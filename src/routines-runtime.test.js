@@ -1337,6 +1337,31 @@ for (const [calendar, expected] of Object.entries({
   });
 }
 
+for (const [day, week, range] of [
+  ["2026-07-15", 29, "Jul 13–Jul 19"], ["2026-10-05", 41, "Oct 5–Oct 11"],
+  ["2021-01-01", 53, "Dec 28–Jan 3"], ["2021-01-04", 1, "Jan 4–Jan 10"],
+  ["2024-12-30", 1, "Dec 30–Jan 5"],
+]) {
+  test(`Gregorian sidebar shows ISO Week ${week} on ${day} without changing navigation or range`, async (t) => {
+    const f = fixture(); t.after(() => f.runtime.destroy());
+    f.setDate(new Date(`${day}T12:00:00`));
+    await enableEmpty(f);
+    const period = currentPeriods(f).weekly;
+    const page = f.pages().get(period.pageName);
+    assert.ok(page, "existing page-name format remains unchanged");
+    const summary = contentBlocks(page)[0];
+    assert.ok(namedCalls(f, "sidebar").some((call) => call[2] === summary.uuid), "native summary navigation retained");
+    const style = namedCalls(f, "style").filter((call) => call[1].key === "jr-sidebar-roots").at(-1)[1].style;
+    assert.ok(style.includes(`::before { content: "Week ${week} · ${range}";`));
+    assert.equal(page.properties["jr-start"], period.start);
+    assert.equal(page.properties["jr-end"], period.end);
+    assert.equal(namedCalls(f, "calendar").length, 0);
+    const before = clone([...f.pages()]);
+    await f.runtime.showCurrent();
+    assert.deepEqual([...f.pages()], before, "caption changes never rewrite graph content");
+  });
+}
+
 test("fresh default definitions do not auto-seed an existing current snapshot", async (t) => {
   const f = fixture(); t.after(() => f.runtime.destroy());
   await enableEmpty(f);

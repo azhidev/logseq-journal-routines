@@ -27,6 +27,15 @@ function shiftedIso(date, days) {
   return isoDate(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, shifted.getUTCDate());
 }
 
+/** ISO 8601 week: Monday-start, with week 1 containing January 4. */
+export function isoWeekNumber(iso) {
+  const day = civilDay(iso);
+  // The Thursday identifies the ISO week-year, including December/January overlap.
+  day.setUTCDate(day.getUTCDate() + 3 - (day.getUTCDay() + 6) % 7);
+  const yearStart = civilDay(isoDate(day.getUTCFullYear(), 1, 1));
+  return Math.floor((day.getTime() - yearStart.getTime()) / (7 * DAY_MS)) + 1;
+}
+
 /** Extract a device-local civil day. Do not use toISOString() here. */
 export function localCivilDate(date = new Date()) {
   if (!(date instanceof Date) || !Number.isFinite(date.getTime())) {

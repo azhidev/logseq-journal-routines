@@ -1,6 +1,6 @@
 import { createActivationStorage, graphIdentity } from "./activation-storage.js";
 import { createCalendarClient } from "./calendar-client.js";
-import { gregorianPeriods, localCivilDate, makePeriod, matchesPeriodMetadata } from "./period-model.js";
+import { gregorianPeriods, isoWeekNumber, localCivilDate, makePeriod, matchesPeriodMetadata } from "./period-model.js";
 import { createPeriodSnapshot } from "./period-snapshot.js";
 import { ensureRoutineHistory } from "./routine-history.js";
 import { installDailyJournalTemplate, syncDailyTemplateContext } from "./daily-template.js";
@@ -263,7 +263,8 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       const weekly = `Week · ${short(selected.weekly.start)}–${short(selected.weekly.end)}`;
       const monthly = new Intl.DateTimeFormat("en", { month: "long", year: "numeric" }).format(date);
       return {
-        weekly: { ...selected.weekly, displayTitle: weekly, pageName: `${weekly} — ${selected.weekly.start}` },
+        weekly: { ...selected.weekly, displayTitle: weekly, pageName: `${weekly} — ${selected.weekly.start}`,
+          sidebarTitle: `Week ${isoWeekNumber(selected.weekly.start)} · ${short(selected.weekly.start)}–${short(selected.weekly.end)}` },
         monthly: { ...selected.monthly, displayTitle: monthly, pageName: `${monthly} — ${selected.monthly.start}` },
       };
     }

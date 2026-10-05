@@ -20,6 +20,7 @@ Journal & Routines is a lightweight Logseq plugin that shows the current week's 
 - **Definition pages** — `Journal & Routines — Weekly definition` and `Journal & Routines — Monthly definition`; edits affect later periods only.
 - **One snapshot per period** — tasks are copied once when a period is initialized; completed tasks and deliberate deletions are never reset or refilled.
 - **Gregorian standalone** — Monday-start weeks, device-local civil day. **Optional Jalali** — Saturday-start weeks via the Persian Calendar plugin; calendar switching preserves and reuses previous periods.
+- Gregorian weekly sidebar headers show the ISO 8601 week number (e.g. **Week 41**) alongside the existing date range, without renaming pages or changing navigation.
 - **History** — **Show routine history** opens a native page listing weekly/monthly periods newest first across both calendars; clicking a result opens the original page.
 - **Optional daily journal template** — native Focus, Tasks, Priority A, Pending (`WAITING`) and This week sections with original-task queries; a guarded **Apply daily template to today** action for empty journals.
 - **First-run onboarding** — welcome screen with **Create my first routine system**; **Skip for now** stays quiet for that graph.
