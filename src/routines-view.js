@@ -103,7 +103,7 @@ export function mountRoutinesView(document, {
   advanced.hidden = true;
   element("h2", "Routine definitions", advanced);
   element("p", "Early build — Logseq Desktop 0.10.15 behavior is unverified. Test on a disposable Markdown file graph first.", advanced);
-  element("p", "Enable creates one current week and month snapshot. When both default definition pages are new, it seeds two Persian TODOs in each definition and current period; existing or selected definitions are left unchanged. No journal edits or template changes.", advanced);
+  element("p", "Enable creates one current week and month snapshot. When both default definition pages are new, it seeds two starter TODOs in each definition and current period (English for Gregorian, Persian for Jalali); existing or selected definitions are left unchanged. No journal edits or template changes.", advanced);
   element("p", "Edit definitions before Enable to choose your own first tasks. Later definition edits affect future periods only: no refill of deleted tasks, reset of completed tasks, or carry-forward. Missed periods are not backfilled; history stays intact when disabled.", advanced);
 
   const calendarLabel = element("label", "Calendar", panel);
@@ -187,7 +187,7 @@ export function mountRoutinesView(document, {
   const enable = button("Enable", actions);
   const disable = button("Disable", actions);
   const current = button("Show current", actions);
-  const examples = button("Add two Persian examples per routine", actions);
+  const examples = button("Add two examples per routine", actions);
   const history = button("History", actions);
   element("p", "For previously empty periods and definitions: this optional action adds the same examples only if all four pages are unchanged and empty. Existing tasks are never overwritten; an uncertain insert pauses for inspection.", advanced);
   const weekly = button("Open weekly definition", actions);

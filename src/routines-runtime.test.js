@@ -650,7 +650,8 @@ test("first Enable seeds both new default definitions and current localized Greg
     assert.equal(summary.content, "\u200B");
     assert.equal(JSON.parse(period.properties["jr-snapshot-plan"]).displayTitle, "\u200B");
     assert.equal(summary.children.length, 2);
-    assert.ok(summary.children.every((block) => block.content.startsWith("TODO ") && /[\u0600-\u06ff]/.test(block.content)));
+    assert.deepEqual(summary.children.map((block) => block.content), kind === "weekly"
+      ? ["TODO Plan the week", "TODO Review the week"] : ["TODO Set monthly goals", "TODO Review monthly progress"]);
     assert.deepEqual(contentBlocks(definition).map((block) => block.content), summary.children.map((block) => block.content));
   }
   assert.ok(namedCalls(f, "createPage").filter((call) => Object.values(selected).some((period) => period.pageName === call[2]))
@@ -1317,6 +1318,25 @@ test("legacy exact page names are reused without creating localized duplicates o
   assert.equal(f.pages().has(names[0]), false);
 });
 
+for (const [calendar, expected] of Object.entries({
+  gregorian: { weekly: ["TODO Plan the week", "TODO Review the week"], monthly: ["TODO Set monthly goals", "TODO Review monthly progress"] },
+  jalali: { weekly: ["TODO برنامه‌ریزی هفته", "TODO مرور کارهای هفته"], monthly: ["TODO تعیین هدف‌های ماه", "TODO مرور پیشرفت ماه"] },
+})) {
+  test(`fresh ${calendar} setup seeds appropriate starter content`, async (t) => {
+    const f = fixture(); t.after(() => f.runtime.destroy());
+    const status = await f.runtime.start();
+    if (calendar === "jalali") await f.runtime.configure({ calendar }, status.graphKey, { confirmCalendarChange: true });
+    await f.runtime.enable(status.graphKey);
+    for (const kind of ["weekly", "monthly"]) {
+      const definition = f.pages().get(f.runtime.getStatus().definitions[kind]);
+      assert.deepEqual(contentBlocks(definition).map((block) => block.content), expected[kind]);
+      const period = [...f.pages().values()].find((page) => page.properties["jr-kind"] === kind);
+      assert.deepEqual(contentBlocks(period)[0].children.map((block) => block.content), expected[kind]);
+    }
+    assert.equal(namedCalls(f, "calendar").length > 0, calendar === "jalali");
+  });
+}
+
 test("fresh default definitions do not auto-seed an existing current snapshot", async (t) => {
   const f = fixture(); t.after(() => f.runtime.destroy());
   await enableEmpty(f);
@@ -1410,7 +1430,8 @@ test("existing empty default definitions are not auto-seeded; explicit examples 
     assert.equal(seeded.viewBlockIds[kind], summary.uuid);
     const sample = summary.children.map((block) => block.content);
     assert.equal(sample.length, 2);
-    assert.ok(sample.every((line) => line.startsWith("TODO ") && /[\u0600-\u06ff]/.test(line)));
+    assert.deepEqual(sample, kind === "weekly"
+      ? ["TODO Plan the week", "TODO Review the week"] : ["TODO Set monthly goals", "TODO Review monthly progress"]);
     assert.deepEqual(contentBlocks(definition).map((block) => block.content), sample);
     assert.notDeepEqual(summary.children.map((block) => block.uuid), contentBlocks(definition).map((block) => block.uuid));
   }

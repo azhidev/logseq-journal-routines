@@ -160,7 +160,7 @@ test("mount is inert, native and accessible, with concise setup guidance and no 
   assert.equal(h.panel.querySelectorAll("p").find((node) => node.attributes.role === "status").attributes["aria-live"], "polite");
   assert.ok(h.inputs.every((node) => node.parent.tagName === "label"));
   assert.match(h.panel.textContent, /Early build.*Desktop.*unverified/);
-  assert.match(h.panel.textContent, /both default definition pages are new.*two Persian TODOs/);
+  assert.match(h.panel.textContent, /both default definition pages are new.*two starter TODOs.*English for Gregorian, Persian for Jalali/);
   assert.match(h.panel.textContent, /one current week and month snapshot/);
   assert.match(h.panel.textContent, /No journal edits/);
   assert.match(h.panel.textContent, /Edit definitions before Enable/);
@@ -170,7 +170,7 @@ test("mount is inert, native and accessible, with concise setup guidance and no 
   assert.ok(h.inputs.every((node) => node.disabled));
   assert.equal(h.button("Save settings").disabled, true);
   assert.equal(h.button("Enable").disabled, true);
-  assert.equal(h.button("Add two Persian examples per routine").disabled, true);
+  assert.equal(h.button("Add two examples per routine").disabled, true);
   assert.equal(h.button("Disable").disabled, true);
   assert.equal(h.button("Refresh").disabled, false);
   assert.equal(h.button("Close").disabled, false);
@@ -195,13 +195,13 @@ test("authoritative status safely renders graph, error, enabled state and input 
   assert.equal(h.input("autoOpen").checked, false);
   assert.equal(h.button("Enable").disabled, true);
   assert.equal(h.button("Show current").disabled, false);
-  assert.equal(h.button("Add two Persian examples per routine").disabled, false);
+  assert.equal(h.button("Add two examples per routine").disabled, false);
   h.view.render(ready({ paused: true }));
   assert.match(h.panel.textContent, /Disabled — paused/);
   assert.equal(h.error.hidden, true);
   assert.equal(h.input("weeklyDefinition").disabled, false);
   assert.equal(h.button("Show current").disabled, true);
-  assert.equal(h.button("Add two Persian examples per routine").disabled, true);
+  assert.equal(h.button("Add two examples per routine").disabled, true);
   assert.equal(h.button("History").disabled, false);
   h.view.destroy();
 });
@@ -568,7 +568,7 @@ test("stale apply-to-today completion cannot unlock or report against another gr
 test("all navigation, refresh, disable and close callbacks use the documented arguments", async () => {
   const h = fixture();
   h.view.render(ready({ enabled: true }));
-  for (const label of ["Show current", "Add two Persian examples per routine", "History", "Open weekly definition", "Open monthly definition", "Refresh", "Disable", "Close"]) {
+  for (const label of ["Show current", "Add two examples per routine", "History", "Open weekly definition", "Open monthly definition", "Refresh", "Disable", "Close"]) {
     h.button(label).click();
     await tick();
   }

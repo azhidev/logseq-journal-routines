@@ -24,8 +24,14 @@ const DEFAULT_DEFINITIONS = Object.freeze({
 // without rendering the page-properties pre-block. The zero-width anchor has no heading text.
 const SUMMARY_ANCHOR = "\u200B";
 const EXAMPLES = Object.freeze({
-  weekly: ["TODO برنامه‌ریزی هفته", "TODO مرور کارهای هفته"],
-  monthly: ["TODO تعیین هدف‌های ماه", "TODO مرور پیشرفت ماه"],
+  gregorian: {
+    weekly: ["TODO Plan the week", "TODO Review the week"],
+    monthly: ["TODO Set monthly goals", "TODO Review monthly progress"],
+  },
+  jalali: {
+    weekly: ["TODO برنامه‌ریزی هفته", "TODO مرور کارهای هفته"],
+    monthly: ["TODO تعیین هدف‌های ماه", "TODO مرور پیشرفت ماه"],
+  },
 });
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 const EXAMPLE_RESOURCES = [["weekly", "period"], ["monthly", "period"],
@@ -409,7 +415,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
         if (examples?.completed === false || (examples && (!Array.isArray(examples.pages) ||
             !Array.isArray(examples.attempted) || examples.pages.some((page, index) =>
               !Array.isArray(page.ids) || examples.attempted[index] !== page.ids.length)))) {
-          throw new Error("Routine examples have an unfinished or ambiguous write. Inspect the original pages, then use More options → Add two Persian examples per routine to explicitly verify the attempt; no automatic refill or sidebar opening was attempted.");
+          throw new Error("Routine examples have an unfinished or ambiguous write. Inspect the original pages, then use More options → Add two examples per routine to explicitly verify the attempt; no automatic refill or sidebar opening was attempted.");
         }
       }
       await guard(ticket, true);
@@ -652,7 +658,7 @@ export function createRoutinesRuntime({ sdk, storage = createActivationStorage()
       for (const kind of KINDS) selected[kind] = (await ensurePeriod(ctx, current[kind], ticket)).period;
       const resources = EXAMPLE_RESOURCES.map(([kind, type]) => ({ kind, type,
         name: type === "period" ? selected[kind].pageName : ctx.settings.definitions[kind],
-        period: selected[kind], content: EXAMPLES[kind] }));
+        period: selected[kind], content: EXAMPLES[ctx.settings.calendar][kind] }));
       if (new Set(resources.map((resource) => resource.name.toLowerCase())).size !== 4) {
         throw new Error("Selected routine pages overlap; no examples were written.");
       }

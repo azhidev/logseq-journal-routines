@@ -60,7 +60,7 @@ function journalDay(value) {
   return month >= 1 && month <= 12 && day >= 1 && day <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
 }
 
-/** Explicit native insertion only. The durable attempt is never cleared or retried. */
+/** Explicit native insertion only. A dispatched journal write is never blindly retried. */
 export async function applyDailyTemplateToToday({ sdk, storage, graphKey, guard }) {
   if (typeof graphKey !== "string" || !graphKey || typeof guard !== "function") {
     throw new TypeError("Apply to today requires a graph key and graph guard.");
@@ -209,7 +209,37 @@ export async function applyDailyTemplateToToday({ sdk, storage, graphKey, guard 
   active.set(sdk, jobs);
   if (jobs.has(key)) throw new Error("Applying today’s daily template is already in progress.");
   jobs.add(key);
-  let attempted = false;
+  let attempted = false, mutationPossible = false;
+  async function verifySource(source) {
+    const fresh = await template();
+    if (!sameUUID(fresh.uuid, source.uuid) || !sameUUID(fresh.pageUuid, source.pageUuid) || JSON.stringify(fresh.shape) !== JSON.stringify(source.shape) ||
+      JSON.stringify([...fresh.uuids]) !== JSON.stringify([...source.uuids])) {
+      throw new Error("Daily template source changed before application; inspect today. No retry.");
+    }
+  }
+  async function mutate(operation, target, source) {
+    if (!attempted) {
+      // All read-only preflight precedes intent. Persist before dispatch, not ACK.
+      attempted = true;
+      await checked(() => storage.set(key, { version: 1, state: "attempted", journalDay: page.day,
+        pageUuid: page.uuid, rootUuid: source.uuid, targetUuid: target.uuid }));
+      // Storage persistence is asynchronous: retain final safety rechecks for
+      // changes during that await. Failure here is still provably pre-write.
+      await settings();
+      await verifySource(source);
+      await today(page);
+      if (target.id === undefined) {
+        if (await blank(page)) throw new Error("Today’s journal changed before blank-block creation; no insertion.");
+      } else {
+        await blank(page, target.uuid);
+      }
+      await notEditing();
+    }
+    return checked(() => {
+      mutationPossible = true;
+      return operation();
+    });
+  }
   try {
     if (await checked(() => storage.get(key)) !== null) {
       throw unavailable("Today’s daily template was previously attempted; inspect the journal. No retry or rebuild.", "today-previous-attempt");
@@ -224,20 +254,18 @@ export async function applyDailyTemplateToToday({ sdk, storage, graphKey, guard 
       target = { uuid };
     }
     await notEditing();
-    // Metadata only, before either journal write. Even a lost SDK acknowledgement
-    // must not authorize another insertion after reload or deliberate deletion.
-    attempted = true;
-    await checked(() => storage.set(key, { version: 1, state: "attempted", journalDay: page.day,
-      pageUuid: page.uuid, rootUuid: source.uuid, targetUuid: target.uuid }));
     await settings();
     await today(page);
     const existing = await blank(page);
+    await verifySource(source);
     if (target.id === undefined) {
       if (existing) throw new Error("Today’s journal changed before blank-block creation; no insertion.");
+      await today(page);
+      if (await blank(page)) throw new Error("Today’s journal changed before blank-block creation; no insertion.");
       await notEditing();
-      const inserted = await checked(() => sdk.Editor.insertBlock(page.name, "", {
+      const inserted = await mutate(() => sdk.Editor.insertBlock(page.name, "", {
         isPageBlock: true, sibling: false, focus: false, customUUID: target.uuid,
-      }));
+      }), target, source);
       if (!sameUUID(inserted?.uuid, target.uuid)) throw new Error("Blank journal insertion is uncertain; inspect today. No retry.");
       await today(page);
       target = await blank(page, target.uuid);
@@ -245,15 +273,13 @@ export async function applyDailyTemplateToToday({ sdk, storage, graphKey, guard 
       throw new Error("Today’s blank block changed before application; no insertion.");
     }
     await settings();
-    const fresh = await template();
-    if (!sameUUID(fresh.uuid, source.uuid) || !sameUUID(fresh.pageUuid, source.pageUuid) || JSON.stringify(fresh.shape) !== JSON.stringify(source.shape) ||
-      JSON.stringify([...fresh.uuids]) !== JSON.stringify([...source.uuids])) {
-      throw new Error("Daily template source changed before application; inspect today. No retry.");
+    if (mutationPossible) {
+      await verifySource(source);
     }
     await today(page);
     await blank(page, target.uuid);
     await notEditing();
-    await checked(() => sdk.App.insertTemplate(target.uuid, DAILY_TEMPLATE));
+    await mutate(() => sdk.App.insertTemplate(target.uuid, DAILY_TEMPLATE), target, source);
     await today(page);
     const result = await tree(await checked(() => sdk.Editor.getPageBlocksTree(page.uuid)), page, page.id, source.uuids);
     // Native insertion can retain an id-bearing blank anchor because its raw
@@ -268,8 +294,14 @@ export async function applyDailyTemplateToToday({ sdk, storage, graphKey, guard 
     }
     return { pageUuid: page.uuid, pageName: page.name, journalDay: page.day, templateName: DAILY_TEMPLATE };
   } catch (error) {
+    if (attempted && !mutationPossible) {
+      // No journal SDK write was dispatched. Clear only this pinned metadata key,
+      // even after graph/Disable invalidation; never touch journal content here.
+      // Failed cleanup leaves the conservative marker rather than hiding uncertainty.
+      try { await storage.set(key, null); } catch { /* Original failure remains actionable. */ }
+    }
     // Only a preflight refusal may be treated as a harmless skip by combined setup.
-    if (attempted && ["today-not-empty", "today-missing"].includes(error.code)) delete error.code;
+    if (mutationPossible && ["today-not-empty", "today-missing"].includes(error.code)) delete error.code;
     throw error;
   } finally { jobs.delete(key); }
 }

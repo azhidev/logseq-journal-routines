@@ -46,7 +46,9 @@ function fixture({ empty = false, tuples = false } = {}) {
     return { ...clone(block), children: tuples ? block.children.map((child) => ["uuid", child.uuid]) : block.children.map(wire) };
   }
   async function operation(name, args, fn) {
-    assert.equal(events.at(-1), "guard", `${name} has a preceding graph guard`);
+    if (!(name === "storage.set" && args[1] === null)) {
+      assert.equal(events.at(-1), "guard", `${name} has a preceding graph guard`);
+    }
     calls.push([name, ...clone(args)]); events.push(name);
     await hook(name, "before", args);
     const result = fn();
@@ -167,7 +169,7 @@ test("flat native template registration loads the verified subtree through getBl
   const f = fixture({ tuples: true });
   await f.apply();
   const rootReads = f.calls.filter(([name, id]) => name === "getBlock" && id === f.root.uuid);
-  assert.equal(rootReads.length, 2, "source is loaded and revalidated separately from registration");
+  assert.equal(rootReads.length, 3, "source is loaded, preflighted and rechecked after intent persistence");
   assert.ok(rootReads.every(([, , options]) => options.includeChildren === true));
   assert.equal(f.today.blocks.length, 5);
 });
@@ -365,12 +367,72 @@ test("durable marker write failure prevents all journal writes", async () => {
   assert.equal(f.writes().length, 0);
 });
 
+for (const empty of [false, true]) {
+  test(`transient late preflight failure leaves no attempt and permits retry, empty=${empty}`, async () => {
+    const f = fixture({ empty }); let reads = 0;
+    f.setHook((name, phase) => {
+      if (name === "config" && phase === "before" && ++reads === 2) throw new Error("Transient config read");
+    });
+    await assert.rejects(f.apply(), /Transient config read/);
+    assert.equal(f.writes().length, 0);
+    assert.equal(f.calls.filter(([name]) => name === "storage.set").length, 0, "preflight never records write intent");
+    assert.equal(f.records.get(applyKey()) ?? null, null);
+    f.setHook(async () => {});
+    await f.apply();
+    assert.equal(f.records.get(applyKey()).state, "attempted");
+    assert.equal(f.today.blocks.filter((block) => withoutID(block).trim()).length, 5);
+  });
+}
+
 test("native journals disabled after durable approval stop before insertion", async () => {
   const f = fixture();
   f.setHook((name, phase) => { if (name === "storage.set" && phase === "after") f.config.enabledJournals = false; });
   await assert.rejects(f.apply(), /Enable native journals/);
   assert.equal(f.writes().length, 0);
-  assert.equal(f.records.has(applyKey()), true, "uncertain attempt remains protected");
+  assert.equal(f.records.get(applyKey()), null, "no journal write was dispatched; retry is safe");
+  f.setHook(async () => {});
+  f.config.enabledJournals = true;
+  await f.apply();
+});
+
+test("transient boundary recheck failure clears only this journal intent and permits retry", async () => {
+  const f = fixture(); let intent = false;
+  f.records.set(applyKey("graph-b"), { state: "attempted" });
+  f.setHook((name, phase, args) => {
+    if (name === "storage.set" && phase === "after" && args[1]?.state === "attempted") intent = true;
+    if (intent && name === "getTemplate" && phase === "before") throw new Error("Transient source read");
+  });
+  await assert.rejects(f.apply(), /Transient source read/);
+  assert.equal(f.writes().length, 0);
+  assert.equal(f.records.get(applyKey()), null);
+  assert.deepEqual(f.records.get(applyKey("graph-b")), { state: "attempted" });
+  f.setHook(async () => {});
+  await f.apply();
+  assert.equal(f.records.get(applyKey()).state, "attempted");
+});
+
+test("graph invalidation during intent persistence clears pre-write metadata without journal work", async () => {
+  const f = fixture();
+  f.setHook((name, phase, args) => {
+    if (name === "storage.set" && phase === "after" && args[1]?.state === "attempted") f.stop();
+  });
+  await assert.rejects(f.apply(), /Graph changed or routines disabled/);
+  assert.equal(f.writes().length, 0);
+  assert.equal(f.records.get(applyKey()), null);
+});
+
+test("failed pre-write intent cleanup leaves conservative protection rather than authorizing retry", async () => {
+  const f = fixture();
+  f.setHook((name, phase, args) => {
+    if (name === "storage.set" && phase === "after" && args[1]?.state === "attempted") f.setEditing(true);
+    if (name === "storage.set" && phase === "before" && args[1] === null) throw new Error("Storage unavailable");
+  });
+  await assert.rejects(f.apply(), /Finish editing/);
+  assert.equal(f.writes().length, 0);
+  assert.equal(f.records.get(applyKey()).state, "attempted");
+  f.setHook(async () => {}); f.setEditing(false);
+  await assert.rejects(f.apply(), /previously attempted/);
+  assert.equal(f.writes().length, 0);
 });
 
 for (const name of ["insertBlock", "insertTemplate"]) {
@@ -452,6 +514,7 @@ test("today rollover after an attempt does not write to yesterday or tomorrow", 
   });
   await assert.rejects(f.apply(), /changed during application/);
   assert.equal(f.writes().length, 0);
+  assert.equal(f.records.get(applyKey()), null);
 });
 
 test("user journal edit during template revalidation is preserved and prevents native insertion", async () => {
@@ -469,6 +532,7 @@ test("source section edit after approval is not applied from a stale snapshot", 
   f.setHook((name, phase) => { if (name === "storage.set" && phase === "after") f.source[0].content = "Changed source"; });
   await assert.rejects(f.apply(), /source changed/);
   assert.equal(f.writes().length, 0);
+  assert.equal(f.records.get(applyKey()), null);
 });
 
 for (const [name, corrupt] of [

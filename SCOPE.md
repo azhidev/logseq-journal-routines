@@ -60,7 +60,7 @@ Unfinished tasks stay in their original period and remain accessible through his
 
 After per-graph activation, create only the current period if it has not been initialized. Reuse it on subsequent days/reloads. At rollover initialize the new current period once.
 
-- Do not backfill missed weeks/months or pre-create future periods. On first Enable only, when **both default definition pages did not exist**, create them and safely seed two Persian TODOs in each and in the two current snapshots. Existing/selected definition pages, including intentionally empty ones, are never auto-seeded. An explicit per-graph action may add the same examples to verified empty current periods and definitions; interrupted/edited outcomes pause rather than refill. Failed reads are not proof that a page is missing or empty.
+- Do not backfill missed weeks/months or pre-create future periods. On first Enable only, when **both default definition pages did not exist**, create them and safely seed two starter TODOs in each and in the two current snapshots: English in Gregorian mode, Persian in Jalali mode. For v0.5.0 starter language follows the selected calendar; there is no independent language preference. Existing/selected definition pages, including intentionally empty ones, are never auto-seeded. An explicit per-graph action may add the same calendar-specific examples to verified empty current periods and definitions; interrupted/edited outcomes pause rather than refill. Failed reads are not proof that a page is missing or empty.
 
 ## D6 — Small setup, isolated by graph [approved]
 

@@ -522,7 +522,7 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
     });
     await test("optional examples refuse to overwrite populated periods and definitions", async () => {
       const before = JSON.stringify(periods()), count = writes().length;
-      await click("Add two Persian examples per routine", { error: true });
+      await click("Add two examples per routine", { error: true });
       check(/completed empty snapshot|content other than unchanged examples/.test(document.querySelector('[role=alert]').textContent),
         "Existing routine content is protected");
       equal(JSON.stringify(periods()), before, "No routine content was changed");
