@@ -231,6 +231,16 @@ test("matching id properties/lines and explicit false header aliases are safe; n
   assert.equal(f.today.blocks[0], f.anchor);
 });
 
+test("editing refusal explains how to finish editing and allows a safe retry", async () => {
+  const f = fixture(); f.setEditing("block-uuid");
+  await assert.rejects(f.apply(), { message: "Finish editing first. Press Esc or click outside the current block, then apply the daily template again." });
+  assert.equal(f.writes().length, 0);
+  assert.equal(f.records.has(applyKey()), false);
+  f.setEditing(false);
+  await f.apply();
+  assert.equal(f.writes().length, 1);
+});
+
 for (const value of [undefined, null, [], "block-uuid"]) {
   test(`editing must be exactly false, not ${JSON.stringify(value)}`, async () => {
     const f = fixture(); f.setEditing(value);

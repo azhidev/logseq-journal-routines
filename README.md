@@ -72,6 +72,8 @@ If a future journal received the template but today did not, native Logseq may h
 
 Today application validates before recording write intent. A failed read-only preflight can be retried; once any journal write is dispatched, its durable attempt marker blocks blind retry, including lost acknowledgements and partial insertion. Existing attempt markers are not automatically cleared.
 
+The daily option selects all five sections together; the preview rows are not separate settings. **More options** separates routine definition choices from **Manual actions**, including standalone installation and today application. If Logseq is editing a block, press **Esc** or click outside it, then apply the daily template again.
+
 **Disable does not remove the native default or template.** To stop native daily insertion, change/remove `:default-templates :journals` in this graph's Logseq configuration; existing journals and template content remain yours.
 
 ## Requirements

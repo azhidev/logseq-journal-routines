@@ -502,7 +502,26 @@ async function browserFixture(registerRoutines, createRoutinesRuntime) {
       equal(writes().length, count, "Startup does not rewrite snapshots");
       await commands.get("journal-routines-setup")();
       const todayQueries = named("todayQuery").length, configs = clone(graphConfigs);
+      button("More options").click();
+      const advanced = document.querySelector(".jr-routines-advanced");
+      check(!advanced.hidden, "More options is expanded");
+      equal(advanced.querySelector("h2").textContent, "More options", "Named configuration area");
+      const manual = advanced.querySelector(".jr-routines-manual");
+      equal(manual.querySelector("h2").textContent, "Manual actions", "Manual tools have a separate heading");
+      check(manual.contains(button("Apply daily template to today")), "Apply-to-today is a manual tool");
+      check(!manual.contains(button("Apply selected options")), "Primary apply stays separate from manual tools");
+      equal(document.querySelectorAll(".jr-routines-preview li strong").length, 4, "Consistent five-section preview rows");
+      const overlay = document.querySelector(".jr-routines");
+      const oldWidth = overlay.style.width;
+      overlay.style.width = "360px";
+      const panel = document.querySelector(".jr-routines-panel");
+      check(panel.scrollWidth <= panel.clientWidth, "Expanded panel fits sidebar width without horizontal scrolling");
+      check(getComputedStyle(field("includeDaily").parentElement).borderColor === getComputedStyle(button("Apply selected options")).borderColor,
+        "Selected template uses the primary accent");
       field("includeDaily").click();
+      check(getComputedStyle(field("includeDaily").parentElement).borderColor !== getComputedStyle(button("Apply selected options")).borderColor,
+        "Deselected template has a distinct neutral border");
+      overlay.style.width = oldWidth;
       check(!field("includeDaily").checked, "Repeated initialization is routines only");
       await click("Apply selected options");
       equal(saved().autoOpen, false, "Repeated setup preserves auto-open opt-out");

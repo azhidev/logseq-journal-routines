@@ -159,12 +159,8 @@ test("mount is inert, native and accessible, with concise setup guidance and no 
   assert.equal(h.panel.attributes["aria-labelledby"], h.panel.children[0].id);
   assert.equal(h.panel.querySelectorAll("p").find((node) => node.attributes.role === "status").attributes["aria-live"], "polite");
   assert.ok(h.inputs.every((node) => node.parent.tagName === "label"));
-  assert.match(h.panel.textContent, /Early build.*Desktop.*unverified/);
-  assert.match(h.panel.textContent, /both default definition pages are new.*two starter TODOs.*English for Gregorian, Persian for Jalali/);
-  assert.match(h.panel.textContent, /one current week and month snapshot/);
-  assert.match(h.panel.textContent, /No journal edits/);
-  assert.match(h.panel.textContent, /Edit definitions before Enable/);
-  assert.match(h.panel.textContent, /no refill of deleted tasks/);
+  assert.match(h.panel.textContent, /Definition edits affect future weeks and months only/);
+  assert.match(h.panel.textContent, /Existing tasks and history stay unchanged/);
   assert.match(h.panel.textContent, /Jalali requires a compatible Persian Calendar/);
   assert.deepEqual(h.calendar.children.map((node) => node.value), ["gregorian", "jalali"]);
   assert.ok(h.inputs.every((node) => node.disabled));
@@ -226,6 +222,27 @@ test("quick setup exposes one explicit primary action and collapses manual contr
   assert.equal(feedback.textContent, "All set <unsafe>"); assert.equal(feedback.hidden, false);
 });
 
+test("More options separates configuration from named manual tools without adding section settings", () => {
+  const h = fixture(); h.view.render(ready({ enabled: true }));
+  const advanced = h.panel.children.find((node) => node.className === "jr-routines-advanced");
+  const manual = advanced.children.find((node) => node.className === "jr-routines-manual");
+  assert.equal(advanced.children[0].textContent, "More options");
+  assert.equal(manual.children[0].textContent, "Manual actions");
+  assert.match(advanced.textContent, /Daily journal additions are selected above/);
+  assert.match(manual.textContent, /One-off tools, separate from your selected configuration/);
+  assert.ok(manual.contains(h.button("Apply daily template to today")));
+  assert.ok(manual.contains(h.button("Save settings")));
+  assert.equal(manual.contains(h.input("weeklyDefinition")), false);
+  assert.equal(manual.contains(h.button("Apply selected options")), false);
+  assert.equal(h.input("includeDaily").parent.className, "jr-routines-option");
+  assert.deepEqual(h.panel.querySelectorAll("li").map((row) => row.children[0].textContent),
+    ["🎯 Focus · ☑️ Tasks", "🚩 Priority A", "⏳ Pending", "📅 This week"]);
+  assert.deepEqual(h.inputs.filter((node) => node.type === "checkbox").map((node) => node.name),
+    ["autoOpen", "includeDaily", "replaceExisting"]);
+  assert.deepEqual(h.calls, []);
+  h.view.destroy();
+});
+
 test("primary setup locks duplicate actions and requires calendar approval", async () => {
   const work = deferred(), calls = [];
   const h = fixture({ onQuickSetup: (...args) => { calls.push(args); return work.promise; } });
@@ -249,7 +266,7 @@ test("existing graph exposes daily selection and one apply action without openin
   assert.equal(h.button("Install daily journal template").visible, false);
   assert.match(h.panel.textContent, /Daily journals \(optional\)/);
   assert.match(h.input("includeDaily").parent.textContent, /Use the daily journal template \(recommended\)/);
-  assert.match(h.panel.textContent, /two empty editable blocks each/);
+  assert.match(h.panel.textContent, /Two empty editable blocks each/);
   assert.ok(h.input("includeDaily").attributes["aria-describedby"]);
   h.input("includeDaily").click();
   assert.match(h.panel.textContent, /daily template and all existing journals stay unchanged/);
@@ -394,13 +411,10 @@ test("daily template installation is optional, graph-pinned and explicitly autho
   const h = fixture(), install = h.button("Install daily journal template");
   assert.equal(install.disabled, true);
   assert.equal(h.input("replaceExisting").checked, false);
-  assert.match(h.panel.textContent, /Install separately from Enable/);
-  assert.match(h.panel.textContent, /Focus and Tasks/);
-  assert.match(h.panel.textContent, /Priority A shows unfinished priority-A tasks, excluding WAITING/);
-  assert.match(h.panel.textContent, /Pending shows WAITING tasks/);
-  assert.match(h.panel.textContent, /This week shows original weekly routine tasks and tasks scheduled or due this week, without copying/);
-  assert.match(h.panel.textContent, /eligible empty today\/future journals, not populated journals/);
-  assert.match(h.panel.textContent, /never replaced without your approval/);
+  assert.match(h.panel.textContent, /Install separately, or apply the installed template to today’s empty journal/);
+  assert.match(h.panel.textContent, /Unfinished priority-A tasks, excluding WAITING/);
+  assert.match(h.panel.textContent, /Tasks marked WAITING/);
+  assert.match(h.panel.textContent, /Current weekly tasks and tasks scheduled or due this week/);
   assert.match(h.panel.textContent, /Replace an existing default journal template \(its content is preserved\)/);
   h.view.render(ready());
   install.dispatch("click");
@@ -492,9 +506,9 @@ test("daily template installation locks busy controls and reports failures witho
 test("apply-to-today is a separate graph-scoped action gated on enabled saved calendar", async () => {
   const h = fixture(), apply = h.button("Apply daily template to today");
   assert.equal(apply.disabled, true);
-  assert.match(h.panel.textContent, /native default applies to eligible future pages but may skip today’s preexisting blank block/);
-  assert.match(h.panel.textContent, /actual native today only if its journal is empty or has one blank block; populated journals are refused/);
-  assert.match(h.panel.textContent, /Install may refresh icons and compact queries in untouched generated template sections, but preserves user edits/);
+  assert.match(h.panel.textContent, /Today must be empty or have one blank block/);
+  assert.match(h.panel.textContent, /populated journals are never overwritten/);
+  assert.match(h.panel.textContent, /Existing journals and template edits are preserved/);
   assert.ok(apply.parent.children.indexOf(apply) > apply.parent.children.indexOf(h.button("Install daily journal template")));
   h.view.render(ready());
   apply.dispatch("click");

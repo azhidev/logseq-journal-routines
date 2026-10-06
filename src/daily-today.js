@@ -79,7 +79,7 @@ export async function applyDailyTemplateToToday({ sdk, storage, graphKey, guard 
   }
   async function notEditing() {
     if (await checked(() => sdk.Editor.checkEditing()) !== false) {
-      throw new Error("Finish editing in Logseq before applying the daily template to today.");
+      throw new Error("Finish editing first. Press Esc or click outside the current block, then apply the daily template again.");
     }
   }
   async function today(expected) {
